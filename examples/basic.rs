@@ -16,14 +16,14 @@ fn setup(
 ) {
     // STEP 1: Configure grid dimensions
     // This determines the resolution of your surface
-    *dimensions = DensityFieldSize(UVec3::new(32, 32, 32));
+    *dimensions = DensityFieldSize(UVec3::new(8, 8, 8));
 
     // STEP 2: Configure physical mesh size in world space
-    *mesh_size = DensityFieldMeshSize(Vec3::splat(10.0));
+    *mesh_size = DensityFieldMeshSize(Vec3::splat(8.0));
 
     // STEP 3: Generate a density field
     // For this example, we'll create a sphere using a signed distance function (SDF)
-    let density_field = generate_sphere_sdf(*dimensions, 0.4);
+    let density_field = generate_sphere_sdf(*dimensions, 0.3);
 
     // STEP 4: Spawn an entity with the DensityField component
     // The plugin will automatically:

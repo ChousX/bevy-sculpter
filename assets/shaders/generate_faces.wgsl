@@ -31,24 +31,19 @@ fn get_cell_index(x: u32, y: u32, z: u32) -> u32 {
 // 8x8x8 = 512 threads per workgroup for 3D grid processing
 @compute @workgroup_size(8, 8, 8)
 fn generate_faces(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(global_invocation_id) cell: vec3<u32>,
 ) {
-    // STEP 3: Get cell coordinates
-    let cell_x = global_id.x;
-    let cell_y = global_id.y;
-    let cell_z = global_id.z;
-    
     // STEP 4: Boundary check
     // We need to access neighboring cells, so we need to be within bounds
-    if (cell_x >= dimensions.x - 1u || 
-        cell_y >= dimensions.y - 1u || 
-        cell_z >= dimensions.z - 1u) {
+    if (cell.x >= dimensions.x - 1u || 
+        cell.y >= dimensions.y - 1u || 
+        cell.z >= dimensions.z - 1u) {
         return;
     }
     
     // STEP 5: Calculate cell index
-    let cell_index = cell_x + cell_y * dimensions.x + cell_z * dimensions.x * dimensions.y;
-    
+    let cell_index = get_cell_index(cell.x, cell.y, cell.z);   
+
     // STEP 6: Skip if this cell has no vertex
     // Can't make faces if there's no vertex here
     if (vertex_valid[cell_index] == 0u) {
@@ -131,10 +126,10 @@ fn generate_faces(
     //   v2: right-top    (x+1, y, z+1)
     //   v3: top          (x,   y, z+1)
     
-    if (cell_x + 1u < dimensions.x - 1u && cell_z + 1u < dimensions.z - 1u) {
-        let idx1 = get_cell_index(cell_x + 1u, cell_y, cell_z);        // Right
-        let idx2 = get_cell_index(cell_x + 1u, cell_y, cell_z + 1u);  // Right-top
-        let idx3 = get_cell_index(cell_x,       cell_y, cell_z + 1u);  // Top
+    if (cell.x + 1u < dimensions.x - 1u && cell.z + 1u < dimensions.z - 1u) {
+        let idx1 = get_cell_index(cell.x + 1u, cell.y, cell.z);        // Right
+        let idx2 = get_cell_index(cell.x + 1u, cell.y, cell.z + 1u);  // Right-top
+        let idx3 = get_cell_index(cell.x,       cell.y, cell.z + 1u);  // Top
         
         if (vertex_valid[idx1] != 0u && 
             vertex_valid[idx2] != 0u && 
@@ -167,10 +162,10 @@ fn generate_faces(
     //   v2: back-top     (x, y+1, z+1)
     //   v3: top          (x, y,   z+1)
     
-    if (cell_y + 1u < dimensions.y - 1u && cell_z + 1u < dimensions.z - 1u) {
-        let idx1 = get_cell_index(cell_x, cell_y + 1u, cell_z);        // Back
-        let idx2 = get_cell_index(cell_x, cell_y + 1u, cell_z + 1u);  // Back-top
-        let idx3 = get_cell_index(cell_x, cell_y,       cell_z + 1u);  // Top
+    if (cell.y + 1u < dimensions.y - 1u && cell.z + 1u < dimensions.z - 1u) {
+        let idx1 = get_cell_index(cell.x, cell.y + 1u, cell.z);        // Back
+        let idx2 = get_cell_index(cell.x, cell.y + 1u, cell.z + 1u);  // Back-top
+        let idx3 = get_cell_index(cell.x, cell.y,       cell.z + 1u);  // Top
         
         if (vertex_valid[idx1] != 0u && 
             vertex_valid[idx2] != 0u && 
