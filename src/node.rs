@@ -43,14 +43,15 @@ impl render_graph::Node for SurfaceNetsNode {
         for (buffers, bind_groups) in query.iter(world) {
             // Calculate workgroup counts for this entity's dimensions
             let dims = buffers.dimensions.0;
-            let workgroup_count_3d = (
+            let workgroup_count_3d = uvec3(
                 (dims.x + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
                 (dims.y + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
                 (dims.z + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
             );
             let cell_count = buffers.dimensions.cell_count();
             let workgroup_count_1d = (cell_count + 255) / 256;
-
+            let max_faces = cell_count * 3;
+            let face_workgroups = (max_faces + 255) / 256;
             // Stage 1: Generate Vertices
             if let Some(pipeline) =
                 pipeline_cache.get_compute_pipeline(pipelines.generate_vertices_pipeline)
@@ -58,9 +59,9 @@ impl render_graph::Node for SurfaceNetsNode {
                 pass.set_bind_group(0, &bind_groups.generate_vertices, &[]);
                 pass.set_pipeline(pipeline);
                 pass.dispatch_workgroups(
-                    workgroup_count_3d.0,
-                    workgroup_count_3d.1,
-                    workgroup_count_3d.2,
+                    workgroup_count_3d.x,
+                    workgroup_count_3d.y,
+                    workgroup_count_3d.z,
                 );
             }
 
@@ -89,9 +90,9 @@ impl render_graph::Node for SurfaceNetsNode {
                 pass.set_bind_group(0, &bind_groups.generate_faces, &[]);
                 pass.set_pipeline(pipeline);
                 pass.dispatch_workgroups(
-                    workgroup_count_3d.0,
-                    workgroup_count_3d.1,
-                    workgroup_count_3d.2,
+                    workgroup_count_3d.x,
+                    workgroup_count_3d.y,
+                    workgroup_count_3d.z,
                 );
             }
 
@@ -101,8 +102,6 @@ impl render_graph::Node for SurfaceNetsNode {
             {
                 pass.set_bind_group(0, &bind_groups.prefix_sum_faces, &[]);
                 pass.set_pipeline(pipeline);
-                let max_faces = cell_count * 3;
-                let face_workgroups = (max_faces + 255) / 256;
                 pass.dispatch_workgroups(face_workgroups, 1, 1);
             }
 
@@ -112,8 +111,6 @@ impl render_graph::Node for SurfaceNetsNode {
             {
                 pass.set_bind_group(0, &bind_groups.compact_faces, &[]);
                 pass.set_pipeline(pipeline);
-                let max_faces = cell_count * 3;
-                let face_workgroups = (max_faces + 255) / 256;
                 pass.dispatch_workgroups(face_workgroups, 1, 1);
             }
         }
