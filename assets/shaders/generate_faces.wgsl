@@ -2,7 +2,8 @@
 // KERNEL 4: Generate Faces
 // ============================================
 // This shader creates quad faces between adjacent vertices in the 3D grid.
-// Each cell can generate up to 3 faces (one for each axis direction).
+// Following the Surface Nets algorithm, faces are only generated where
+// the isosurface crosses between cells (sign change in SDF).
 
 // STEP 1: Define bind group
 @group(0) @binding(0)
@@ -21,7 +22,7 @@ var<storage, read_write> face_valid: array<u32>;  // Output: which face slots ar
 var<uniform> dimensions: vec3<u32>;  // Grid dimensions
 
 // ===========================================================
-// Helper function MUST be at global scope in WGSL
+// Helper function to convert 3D coordinates to 1D array index
 // ===========================================================
 fn get_cell_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * dimensions.x + z * dimensions.x * dimensions.y;
@@ -33,64 +34,70 @@ fn get_cell_index(x: u32, y: u32, z: u32) -> u32 {
 fn generate_faces(
     @builtin(global_invocation_id) cell: vec3<u32>,
 ) {
-    // STEP 4: Boundary check
-    // We need to access neighboring cells, so we need to be within bounds
+    // STEP 3: Boundary check
+    // Surface Nets doesn't generate faces on the maximum boundaries
+    // This matches the Rust implementation's boundary handling
     if (cell.x >= dimensions.x - 1u || 
         cell.y >= dimensions.y - 1u || 
         cell.z >= dimensions.z - 1u) {
         return;
     }
     
-    // STEP 5: Calculate cell index
-    let cell_index = get_cell_index(cell.x, cell.y, cell.z);   
-
-    // STEP 6: Skip if this cell has no vertex
-    // Can't make faces if there's no vertex here
+    // STEP 4: Calculate this cell's index in the flattened array
+    let cell_index = get_cell_index(cell.x, cell.y, cell.z);
+    
+    // STEP 5: Skip if this cell has no vertex
+    // We can't create faces starting from a cell without a vertex
     if (vertex_valid[cell_index] == 0u) {
         return;
     }
     
-    // STEP 7: Get the compacted vertex index for this cell
+    // STEP 6: Get the compacted vertex index for this cell
+    // This is the actual index in the final vertex buffer
     let v0 = vertex_indices[cell_index];
-   
     
-    // STEP 9: Calculate base face index for this cell
-    // Each cell can generate up to 3 faces, so we reserve 3 slots per cell
-    // Cell 0 gets face slots 0,1,2; Cell 1 gets slots 3,4,5; etc.
+    // STEP 7: Calculate base face index for this cell
+    // Each cell reserves 3 face slots (one per axis: X, Y, Z)
+    // Example: Cell 0 → faces 0,1,2; Cell 1 → faces 3,4,5; etc.
     let base_face_index = cell_index * 3u;
-    var local_face_count = 0u;  // Track how many faces we actually create
+    var local_face_count = 0u;  // Tracks how many faces we actually create
     
     // ============================================
-    // FACE GENERATION EXPLANATION
+    // SURFACE NETS FACE GENERATION ALGORITHM
     // ============================================
-    // Surface Nets creates faces by connecting vertices in adjacent cells.
-    // Each cell can create 3 quad faces in the positive X, Y, and Z directions.
+    // Faces are generated along each axis direction (X, Y, Z).
+    // For each axis, we create a quad face perpendicular to that axis
+    // if all 4 cells forming that quad have valid vertices.
     //
-    // Quad layout for each face:
+    // The algorithm follows these principles from the Rust implementation:
+    // 1. Only generate faces on edges parallel to each axis
+    // 2. Check boundaries: don't generate on minimum Y/Z (for X-faces), etc.
+    // 3. Verify all 4 corner cells have vertices before creating the quad
+    //
+    // Quad vertex ordering (counter-clockwise when viewed from outside):
     //    v3 ---- v2
     //    |       |
-    //    |       |
     //    v0 ---- v1
+    
+    // ============================================
+    // FACE 1: X-axis parallel edge (Y-Z plane face)
+    // ============================================
+    // Generate a quad perpendicular to the X-axis
+    // This face lies in a Y-Z plane and requires 4 cells:
+    //   v0: current cell      (x, y,   z)
+    //   v1: +Y neighbor       (x, y+1, z)
+    //   v2: +Y+Z neighbor     (x, y+1, z+1)
+    //   v3: +Z neighbor       (x, y,   z+1)
     //
-    // We create a face if all 4 neighboring cells have valid vertices.
-    
-    // ============================================
-    // FACE 1: X-Y Plane (looking in +Z direction)
-    // ============================================
-    // STEP 10: Create face in the X-Y plane
-    // This face connects 4 cells in a square on the X-Y plane:
-    //   v0: current cell (x,   y,   z)
-    //   v1: right        (x+1, y,   z)
-    //   v2: right-back   (x+1, y+1, z)
-    //   v3: back         (x,   y+1, z)
-    
-    if (cell_x + 1u < dimensions.x - 1u && cell_y + 1u < dimensions.y - 1u) {
-        // Calculate indices of the 3 neighboring cells
-        let idx1 = get_cell_index(cell_x + 1u, cell_y,       cell_z);  // Right
-        let idx2 = get_cell_index(cell_x + 1u, cell_y + 1u, cell_z);  // Right-back
-        let idx3 = get_cell_index(cell_x,       cell_y + 1u, cell_z);  // Back
+    // Boundary check: Only create if not on minimum Y or Z boundaries
+    // (matches: if x != minx && y != miny in Rust)
+    if (cell.y > 0u && cell.z > 0u) {
+        // Calculate indices of the 3 neighboring cells needed for this quad
+        let idx1 = get_cell_index(cell.x, cell.y + 1u, cell.z);       // +Y neighbor
+        let idx2 = get_cell_index(cell.x, cell.y + 1u, cell.z + 1u);  // +Y+Z neighbor
+        let idx3 = get_cell_index(cell.x, cell.y,       cell.z + 1u);  // +Z neighbor
         
-        // STEP 11: Check if all 4 cells have valid vertices
+        // Check if all 4 cells have valid vertices
         if (vertex_valid[idx1] != 0u && 
             vertex_valid[idx2] != 0u && 
             vertex_valid[idx3] != 0u) {
@@ -100,110 +107,129 @@ fn generate_faces(
             let v2 = vertex_indices[idx2];
             let v3 = vertex_indices[idx3];
             
-            // STEP 12: Write face to output
-            // Each face is stored as 4 consecutive u32 values (vertex indices)
+            // Calculate where to write this face in the output array
+            let face_idx = base_face_index + local_face_count;
+            let face_data_base = face_idx * 4u;  // Each face stores 4 vertex indices
+            
+            // Write the quad vertices in counter-clockwise order
+            faces[face_data_base + 0u] = v0;  // Bottom-left
+            faces[face_data_base + 1u] = v1;  // Top-left (moved up in Y)
+            faces[face_data_base + 2u] = v2;  // Top-right (moved up in Y and Z)
+            faces[face_data_base + 3u] = v3;  // Bottom-right (moved up in Z)
+            
+            // Mark this face slot as containing valid data
+            face_valid[face_idx] = 1u;
+            local_face_count = local_face_count + 1u;
+        }
+    }
+    
+    // ============================================
+    // FACE 2: Y-axis parallel edge (X-Z plane face)
+    // ============================================
+    // Generate a quad perpendicular to the Y-axis
+    // This face lies in an X-Z plane and requires 4 cells:
+    //   v0: current cell      (x,   y, z)
+    //   v1: +X neighbor       (x+1, y, z)
+    //   v2: +X+Z neighbor     (x+1, y, z+1)
+    //   v3: +Z neighbor       (x,   y, z+1)
+    //
+    // Boundary check: Only create if not on minimum X or Z boundaries
+    // (matches: if x != minx && z != minz in Rust)
+    if (cell.x > 0u && cell.z > 0u) {
+        // Calculate indices of the 3 neighboring cells
+        let idx1 = get_cell_index(cell.x + 1u, cell.y, cell.z);       // +X neighbor
+        let idx2 = get_cell_index(cell.x + 1u, cell.y, cell.z + 1u);  // +X+Z neighbor
+        let idx3 = get_cell_index(cell.x,       cell.y, cell.z + 1u);  // +Z neighbor
+        
+        // Verify all 4 corner vertices exist
+        if (vertex_valid[idx1] != 0u && 
+            vertex_valid[idx2] != 0u && 
+            vertex_valid[idx3] != 0u) {
+            
+            // Get vertex indices
+            let v1 = vertex_indices[idx1];
+            let v2 = vertex_indices[idx2];
+            let v3 = vertex_indices[idx3];
+            
+            // Write face data
             let face_idx = base_face_index + local_face_count;
             let face_data_base = face_idx * 4u;
             
             faces[face_data_base + 0u] = v0;  // Bottom-left
-            faces[face_data_base + 1u] = v1;  // Bottom-right
-            faces[face_data_base + 2u] = v2;  // Top-right
-            faces[face_data_base + 3u] = v3;  // Top-left
+            faces[face_data_base + 1u] = v1;  // Bottom-right (moved in X)
+            faces[face_data_base + 2u] = v2;  // Top-right (moved in X and Z)
+            faces[face_data_base + 3u] = v3;  // Top-left (moved in Z)
             
-            // Mark this face slot as valid
+            // Mark face as valid
             face_valid[face_idx] = 1u;
             local_face_count = local_face_count + 1u;
         }
     }
     
     // ============================================
-    // FACE 2: X-Z Plane (looking in +Y direction)
+    // FACE 3: Z-axis parallel edge (X-Y plane face)
     // ============================================
-    // STEP 13: Create face in the X-Z plane
-    // This face connects 4 cells in a square on the X-Z plane:
-    //   v0: current cell (x,   y, z)
-    //   v1: right        (x+1, y, z)
-    //   v2: right-top    (x+1, y, z+1)
-    //   v3: top          (x,   y, z+1)
-    
-    if (cell.x + 1u < dimensions.x - 1u && cell.z + 1u < dimensions.z - 1u) {
-        let idx1 = get_cell_index(cell.x + 1u, cell.y, cell.z);        // Right
-        let idx2 = get_cell_index(cell.x + 1u, cell.y, cell.z + 1u);  // Right-top
-        let idx3 = get_cell_index(cell.x,       cell.y, cell.z + 1u);  // Top
+    // Generate a quad perpendicular to the Z-axis
+    // This face lies in an X-Y plane and requires 4 cells:
+    //   v0: current cell      (x,   y,   z)
+    //   v1: +X neighbor       (x+1, y,   z)
+    //   v2: +X+Y neighbor     (x+1, y+1, z)
+    //   v3: +Y neighbor       (x,   y+1, z)
+    //
+    // Boundary check: Only create if not on minimum X or Y boundaries
+    // (matches: if y != miny && z != minz in Rust)
+    if (cell.x > 0u && cell.y > 0u) {
+        // Calculate indices of the 3 neighboring cells
+        let idx1 = get_cell_index(cell.x + 1u, cell.y,       cell.z);  // +X neighbor
+        let idx2 = get_cell_index(cell.x + 1u, cell.y + 1u, cell.z);  // +X+Y neighbor
+        let idx3 = get_cell_index(cell.x,       cell.y + 1u, cell.z);  // +Y neighbor
         
+        // Verify all 4 corner vertices exist
         if (vertex_valid[idx1] != 0u && 
             vertex_valid[idx2] != 0u && 
             vertex_valid[idx3] != 0u) {
             
+            // Get vertex indices
             let v1 = vertex_indices[idx1];
             let v2 = vertex_indices[idx2];
             let v3 = vertex_indices[idx3];
             
+            // Write face data
             let face_idx = base_face_index + local_face_count;
             let face_data_base = face_idx * 4u;
             
-            faces[face_data_base + 0u] = v0;
-            faces[face_data_base + 1u] = v1;
-            faces[face_data_base + 2u] = v2;
-            faces[face_data_base + 3u] = v3;
+            faces[face_data_base + 0u] = v0;  // Bottom-left
+            faces[face_data_base + 1u] = v1;  // Bottom-right (moved in X)
+            faces[face_data_base + 2u] = v2;  // Top-right (moved in X and Y)
+            faces[face_data_base + 3u] = v3;  // Top-left (moved in Y)
             
+            // Mark face as valid
             face_valid[face_idx] = 1u;
             local_face_count = local_face_count + 1u;
         }
     }
     
-    // ============================================
-    // FACE 3: Y-Z Plane (looking in +X direction)
-    // ============================================
-    // STEP 14: Create face in the Y-Z plane
-    // This face connects 4 cells in a square on the Y-Z plane:
-    //   v0: current cell (x, y,   z)
-    //   v1: back         (x, y+1, z)
-    //   v2: back-top     (x, y+1, z+1)
-    //   v3: top          (x, y,   z+1)
-    
-    if (cell.y + 1u < dimensions.y - 1u && cell.z + 1u < dimensions.z - 1u) {
-        let idx1 = get_cell_index(cell.x, cell.y + 1u, cell.z);        // Back
-        let idx2 = get_cell_index(cell.x, cell.y + 1u, cell.z + 1u);  // Back-top
-        let idx3 = get_cell_index(cell.x, cell.y,       cell.z + 1u);  // Top
-        
-        if (vertex_valid[idx1] != 0u && 
-            vertex_valid[idx2] != 0u && 
-            vertex_valid[idx3] != 0u) {
-            
-            let v1 = vertex_indices[idx1];
-            let v2 = vertex_indices[idx2];
-            let v3 = vertex_indices[idx3];
-            
-            let face_idx = base_face_index + local_face_count;
-            let face_data_base = face_idx * 4u;
-            
-            faces[face_data_base + 0u] = v0;
-            faces[face_data_base + 1u] = v1;
-            faces[face_data_base + 2u] = v2;
-            faces[face_data_base + 3u] = v3;
-            
-            face_valid[face_idx] = 1u;
-            local_face_count = local_face_count + 1u;
-        }
-    }
-    
-    // STEP 15: Mark unused face slots as invalid
-    // If we created fewer than 3 faces, mark the remaining slots as invalid
+    // STEP 8: Mark unused face slots as invalid
+    // Each cell reserves 3 face slots, but may use fewer
+    // Mark any unused slots (when local_face_count < 3) as invalid
+    // This ensures the compaction step knows which faces to keep
     for (var i = local_face_count; i < 3u; i = i + 1u) {
         face_valid[base_face_index + i] = 0u;
     }
 }
 
 // ============================================
-// EXAMPLE VISUALIZATION
+// ALGORITHM SUMMARY
 // ============================================
-// Imagine a 3x3x3 grid of cells. Each cell with a valid vertex can create
-// faces with its neighbors. A cell at (1,1,1) might create:
+// This shader implements the face generation step of Surface Nets:
 //
-// 1. X-Y face: connects (1,1,1), (2,1,1), (2,2,1), (1,2,1)
-// 2. X-Z face: connects (1,1,1), (2,1,1), (2,1,2), (1,1,2)
-// 3. Y-Z face: connects (1,1,1), (1,2,1), (1,2,2), (1,1,2)
+// 1. For each cell with a valid vertex (surface intersection)
+// 2. Try to create up to 3 quad faces (one per axis direction)
+// 3. Each face requires 4 adjacent cells to all have vertices
+// 4. Faces are only created on interior edges (not on grid boundaries)
+// 5. The result is a set of quads that form the mesh surface
 //
-// Each face is a quad (4 vertices) that represents part of the surface.
-// The faces connect together to form the complete mesh surface.
+// The quads will be converted to triangles in a later step:
+// Each quad [v0, v1, v2, v3] becomes two triangles:
+//   Triangle 1: [v0, v1, v2]
+//   Triangle 2: [v0, v2, v3]
