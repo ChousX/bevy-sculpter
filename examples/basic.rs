@@ -1,4 +1,4 @@
-// examples/terrain.rs
+// examples/basic.rs
 use bevy::prelude::*;
 use chunky::prelude::*;
 use sculpter::prelude::*;
@@ -21,10 +21,12 @@ fn setup(mut commands: Commands) {
                 let mut field = DensityField::new();
 
                 // Create a sphere that spans multiple chunks
-                let local_center = vec3(16.0, 16.0, 16.0); // Center of chunk
-                let global_offset = vec3(x as f32, y as f32, z as f32) * 32.0;
-                let sphere_center = vec3(0.0, 0.0, 0.0); // World center
-                let local_sphere_center = sphere_center - global_offset + local_center;
+                // The sphere is centered at world origin
+                // Each chunk needs to know where the sphere surface is relative to its local grid
+                let chunk_world_offset = vec3(x as f32, y as f32, z as f32) * 32.0; // Grid units
+                let sphere_center_world = vec3(0.0, 0.0, 0.0); // World center in grid units
+                let local_sphere_center =
+                    sphere_center_world - chunk_world_offset + vec3(16.0, 16.0, 16.0);
 
                 field.fill_sphere(local_sphere_center, 20.0);
 
@@ -33,15 +35,19 @@ fn setup(mut commands: Commands) {
         }
     }
 
-    // Camera
+    // Camera - position it to see the sphere
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(30.0, 30.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(25.0, 25.0, 25.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
     // Light
     commands.spawn((
-        DirectionalLight::default(),
-        Transform::from_xyz(10.0, 10.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            illuminance: 10000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
