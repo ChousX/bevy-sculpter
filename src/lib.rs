@@ -87,23 +87,16 @@ fn process_dirty_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     dirty_chunks: Query<
-        (
-            Entity,
-            &ChunkPos,
-            &DensityField,
-            Option<&NeighborDensityFields>,
-        ),
+        (Entity, &DensityField, Option<&NeighborDensityFields>),
         With<DensityFieldDirty>,
     >,
     mesh_size: Res<DensityFieldMeshSize>,
     existing_meshes: Query<&Mesh3d>,
 ) {
-    for (entity, chunk_pos, field, neighbors) in dirty_chunks.iter() {
+    for (entity, field, neighbors) in dirty_chunks.iter() {
         let neighbors = neighbors.cloned().unwrap_or_default();
-        let chunk_offset = chunk_pos.as_vec3() * mesh_size.0;
 
-        if let Some(mesh) = mesher::generate_mesh_cpu(field, &neighbors, mesh_size.0, chunk_offset)
-        {
+        if let Some(mesh) = mesher::generate_mesh_cpu(field, &neighbors, mesh_size.0) {
             let mesh_handle = meshes.add(mesh);
 
             if existing_meshes.get(entity).is_ok() {

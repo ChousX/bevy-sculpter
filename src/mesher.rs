@@ -24,7 +24,6 @@ pub fn generate_mesh_cpu(
     field: &DensityField,
     neighbors: &NeighborDensityFields,
     mesh_size: Vec3,
-    chunk_offset: Vec3,
 ) -> Option<Mesh> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -155,11 +154,7 @@ pub fn generate_mesh_cpu(
 
     let grid_to_world = |gx: f32, gy: f32, gz: f32| -> [f32; 3] {
         let scale = mesh_size / DENSITY_FIELD_SIZE.as_vec3();
-        [
-            gx * scale.x + chunk_offset.x,
-            gy * scale.y + chunk_offset.y,
-            gz * scale.z + chunk_offset.z,
-        ]
+        [gx * scale.x, gy * scale.y, gz * scale.z]
     };
 
     // Pass 1: Generate vertices for each voxel that contains a surface
