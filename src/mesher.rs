@@ -28,7 +28,17 @@ pub fn generate_mesh_cpu(
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let mut vertex_lookup = vec![NULL_VERTEX; FIELD_VOLUME];
+
+    // Extended size: we generate vertices for voxels [0, SIZE] inclusive
+    // The extra layer at SIZE uses neighbor data and allows seamless stitching
+    let extended_size = DENSITY_FIELD_SIZE + UVec3::ONE;
+    let extended_volume = (extended_size.x * extended_size.y * extended_size.z) as usize;
+    let mut vertex_lookup = vec![NULL_VERTEX; extended_volume];
+
+    // Index into extended lookup table
+    let ext_index = |x: u32, y: u32, z: u32| -> usize {
+        (x + y * extended_size.x + z * extended_size.x * extended_size.y) as usize
+    };
 
     // Sample function that handles neighbor lookups
     let sample = |x: i32, y: i32, z: i32| -> f32 {
@@ -158,9 +168,10 @@ pub fn generate_mesh_cpu(
     };
 
     // Pass 1: Generate vertices for each voxel that contains a surface
-    for z in 0..DENSITY_FIELD_SIZE.z {
-        for y in 0..DENSITY_FIELD_SIZE.y {
-            for x in 0..DENSITY_FIELD_SIZE.x {
+    // We iterate over [0, SIZE] inclusive - the extra layer at SIZE uses neighbor data
+    for z in 0..=DENSITY_FIELD_SIZE.z {
+        for y in 0..=DENSITY_FIELD_SIZE.y {
+            for x in 0..=DENSITY_FIELD_SIZE.x {
                 let ix = x as i32;
                 let iy = y as i32;
                 let iz = z as i32;
@@ -176,7 +187,7 @@ pub fn generate_mesh_cpu(
                     }
                 }
 
-                let stride = DensityField::index(x, y, z);
+                let stride = ext_index(x, y, z);
 
                 // If all corners are inside or all outside, no surface here
                 if num_negative == 0 || num_negative == 8 {
@@ -242,14 +253,27 @@ pub fn generate_mesh_cpu(
     }
 
     // Pass 2: Generate quads between adjacent voxels that share an edge crossing
-    let stride_x = 1usize;
-    let stride_y = DENSITY_FIELD_SIZE.x as usize;
-    let stride_z = (DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.y) as usize;
+    //
+    // Surface Nets generates one quad per edge that crosses the isosurface.
+    // Each edge is "owned" by one of the four voxels it connects.
+    // We use the convention that the voxel with the MINIMUM coordinates owns the edge.
+    //
+    // With extended vertices [0, SIZE], we can now generate quads at the high boundary
+    // that connect this chunk's mesh to the neighbor's mesh seamlessly.
+    //
+    // We iterate over [1, SIZE] for quad generation:
+    // - Skip 0 because those edges are owned by the -X/-Y/-Z neighbor chunks
+    // - Include SIZE because we have vertices there now (using neighbor data)
 
-    for z in 0..DENSITY_FIELD_SIZE.z {
-        for y in 0..DENSITY_FIELD_SIZE.y {
-            for x in 0..DENSITY_FIELD_SIZE.x {
-                let stride = DensityField::index(x, y, z);
+    let ext_stride_x = 1usize;
+    let ext_stride_y = extended_size.x as usize;
+    let ext_stride_z = (extended_size.x * extended_size.y) as usize;
+
+    // Iterate over [1, SIZE] inclusive - we need vertices at (x-1), (y-1), (z-1)
+    for z in 1..=DENSITY_FIELD_SIZE.z {
+        for y in 1..=DENSITY_FIELD_SIZE.y {
+            for x in 1..=DENSITY_FIELD_SIZE.x {
+                let stride = ext_index(x, y, z);
                 let v0 = vertex_lookup[stride];
 
                 if v0 == NULL_VERTEX {
@@ -266,14 +290,13 @@ pub fn generate_mesh_cpu(
                 let dy = sample(ix, iy + 1, iz);
                 let dz = sample(ix, iy, iz + 1);
 
-                // X-axis edge: connects voxels at (x,y,z), (x,y-1,z), (x,y,z-1), (x,y-1,z-1)
-                if y > 0 && z > 0 && (d0 < 0.0) != (dx < 0.0) {
-                    let v1 = vertex_lookup[stride - stride_y];
-                    let v2 = vertex_lookup[stride - stride_z];
-                    let v3 = vertex_lookup[stride - stride_y - stride_z];
+                // X-axis edge (between x and x+1): need voxels (x,y,z), (x,y-1,z), (x,y,z-1), (x,y-1,z-1)
+                if (d0 < 0.0) != (dx < 0.0) {
+                    let v1 = vertex_lookup[stride - ext_stride_y];
+                    let v2 = vertex_lookup[stride - ext_stride_z];
+                    let v3 = vertex_lookup[stride - ext_stride_y - ext_stride_z];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
-                        // Winding order depends on which side is inside
                         if d0 < 0.0 {
                             indices.extend_from_slice(&[v0, v1, v3, v0, v3, v2]);
                         } else {
@@ -282,11 +305,11 @@ pub fn generate_mesh_cpu(
                     }
                 }
 
-                // Y-axis edge: connects voxels at (x,y,z), (x-1,y,z), (x,y,z-1), (x-1,y,z-1)
-                if x > 0 && z > 0 && (d0 < 0.0) != (dy < 0.0) {
-                    let v1 = vertex_lookup[stride - stride_x];
-                    let v2 = vertex_lookup[stride - stride_z];
-                    let v3 = vertex_lookup[stride - stride_x - stride_z];
+                // Y-axis edge (between y and y+1): need voxels (x,y,z), (x-1,y,z), (x,y,z-1), (x-1,y,z-1)
+                if (d0 < 0.0) != (dy < 0.0) {
+                    let v1 = vertex_lookup[stride - ext_stride_x];
+                    let v2 = vertex_lookup[stride - ext_stride_z];
+                    let v3 = vertex_lookup[stride - ext_stride_x - ext_stride_z];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
                         if d0 < 0.0 {
@@ -297,11 +320,11 @@ pub fn generate_mesh_cpu(
                     }
                 }
 
-                // Z-axis edge: connects voxels at (x,y,z), (x-1,y,z), (x,y-1,z), (x-1,y-1,z)
-                if x > 0 && y > 0 && (d0 < 0.0) != (dz < 0.0) {
-                    let v1 = vertex_lookup[stride - stride_x];
-                    let v2 = vertex_lookup[stride - stride_y];
-                    let v3 = vertex_lookup[stride - stride_x - stride_y];
+                // Z-axis edge (between z and z+1): need voxels (x,y,z), (x-1,y,z), (x,y-1,z), (x-1,y-1,z)
+                if (d0 < 0.0) != (dz < 0.0) {
+                    let v1 = vertex_lookup[stride - ext_stride_x];
+                    let v2 = vertex_lookup[stride - ext_stride_y];
+                    let v3 = vertex_lookup[stride - ext_stride_x - ext_stride_y];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
                         if d0 < 0.0 {
