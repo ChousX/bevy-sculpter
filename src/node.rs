@@ -114,6 +114,7 @@ impl render_graph::Node for SurfaceNetsNode {
                 pass.dispatch_workgroups(face_workgroups, 1, 1);
             }
         }
+        pass.end();
         Ok(())
     }
 }
