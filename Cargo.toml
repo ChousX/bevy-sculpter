@@ -6,10 +6,13 @@ edition = "2024"
 [dependencies]
 bevy = { version = "0.17", features = ["wayland"] }
 bytemuck = "1.24.0"
-
+# chunky = {git = "https://github.com/ChousX/chunky"}
+chunky = { path = "../chunky/" }
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
+
+
 
 [features]
 # Default to a native dev build.
@@ -30,21 +33,6 @@ dev_native = [
     # Enable embedded asset hot reloading for native dev builds.
     "bevy/embedded_watcher",
 ]
-
-verbose = [
-  "density_field_verbose",
-  "verbose_readback"
-]
-
-readback = ["verbose_readback_vertex_count", "verbose_readback_face_count"]
-verbose_readback = ["verbose_readback_vertex_count", "verbose_readback_vertices", "verbose_readback_face_count", "verbose_readback_faces"]
-verbose_readback_vertex_count = []
-verbose_readback_vertices = []
-verbose_readback_face_count = []
-verbose_readback_faces = []
-
-density_field_verbose = []
-
 [package.metadata.bevy_cli.release]
 # Disable dev features for release builds.
 default-features = false
