@@ -26,7 +26,7 @@ fn setup(mut commands: Commands) {
                 let sphere_center = vec3(0.0, 0.0, 0.0); // World center
                 let local_sphere_center = sphere_center - global_offset + local_center;
 
-                field.fill_sphere(local_sphere_center, 40.0);
+                field.fill_sphere(local_sphere_center, 20.0);
 
                 commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, DensityFieldDirty));
             }

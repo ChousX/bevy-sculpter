@@ -1,21 +1,23 @@
-// src/density.rs
+// src/lib.rs - Surface Nets Plugin with GPU compute and mesh generation
 use bevy::{
+    mesh::Indices,
     prelude::*,
     render::{
         Render, RenderApp, RenderStartup, RenderSystems,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         extract_resource::{ExtractResource, ExtractResourcePlugin},
+        gpu_readback::{Readback, ReadbackComplete},
         render_graph::{RenderGraph, RenderLabel},
         render_resource::*,
         renderer::{RenderDevice, RenderQueue},
     },
 };
-use chunky::{Chunk, ChunkManager, ChunkPos};
+use chunky::{ChunkManager, ChunkPos};
 
 pub mod prelude {
     pub use crate::{
-        DensityField, DensityFieldDirty, DensityFieldMeshSize, NeighborDensityFields,
-        SurfaceNetsPlugin,
+        DENSITY_FIELD_SIZE, DensityField, DensityFieldDirty, DensityFieldMeshSize,
+        NeighborDensityFields, SurfaceNetsPlugin,
     };
 }
 
@@ -33,7 +35,6 @@ pub const FIELD_VOLUME: usize =
 /// Max output sizes
 pub const MAX_VERTICES: u32 = FIELD_VOLUME as u32;
 pub const MAX_INDICES: u32 = MAX_VERTICES * 18;
-
 /// Workgroup size
 pub const WORKGROUP_SIZE: u32 = 4;
 
@@ -50,17 +51,12 @@ impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DensityFieldMeshSize>()
             .add_plugins(ExtractComponentPlugin::<DensityField>::default())
-            .add_plugins(ExtractComponentPlugin::<DensityFieldDirty>::default())
             .add_plugins(ExtractResourcePlugin::<DensityFieldMeshSize>::default())
             .add_systems(
                 PostUpdate,
-                (
-                    auto_mark_dirty,
-                    gather_neighbor_fields,
-                    clear_dirty_after_extract,
-                )
-                    .chain(),
-            );
+                (auto_mark_dirty, gather_neighbor_fields).chain(),
+            )
+            .add_systems(PreUpdate, (process_dirty_chunks, handle_mesh_readback));
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -205,65 +201,57 @@ impl DensityField {
 }
 
 /// Marker: this chunk needs remeshing
-#[derive(Component, ExtractComponent, Clone, Copy, Default, Debug)]
+#[derive(Component, Clone, Copy, Default, Debug)]
 pub struct DensityFieldDirty;
 
+/// Marker: chunk is currently being meshed on GPU
+#[derive(Component)]
+pub struct MeshingInProgress;
+
 /// Cached neighbor field data for seamless meshing
-/// Order: -X, +X, -Y, +Y, -Z, +Z (6 faces)
-/// Each contains only the boundary slice needed (1 voxel thick)
 #[derive(Component, Clone, Debug, Default)]
 pub struct NeighborDensityFields {
-    /// Neighbor data: [neg_x, pos_x, neg_y, pos_y, neg_z, pos_z]
-    /// Each is a flattened 2D slice of the neighboring chunk's boundary
     pub neighbors: [Option<NeighborSlice>; 6],
 }
 
 #[derive(Clone, Debug)]
 pub struct NeighborSlice {
-    /// Flattened boundary data (size depends on which face)
     pub data: Vec<f32>,
 }
 
 impl NeighborSlice {
-    /// Create slice from neighbor's boundary
     pub fn from_field(field: &DensityField, face: NeighborFace) -> Self {
         let (size_a, size_b, get_idx) = match face {
-            // -X face: sample x=DENSITY_FIELD_SIZE.x-1 from neighbor
             NeighborFace::NegX => (
                 DENSITY_FIELD_SIZE.y,
                 DENSITY_FIELD_SIZE.z,
                 Box::new(|a: u32, b: u32| DensityField::index(DENSITY_FIELD_SIZE.x - 1, a, b))
                     as Box<dyn Fn(u32, u32) -> usize>,
             ),
-            // +X face: sample x=0 from neighbor
             NeighborFace::PosX => (
                 DENSITY_FIELD_SIZE.y,
                 DENSITY_FIELD_SIZE.z,
                 Box::new(|a: u32, b: u32| DensityField::index(0, a, b))
                     as Box<dyn Fn(u32, u32) -> usize>,
             ),
-            // -Y face: sample y=DENSITY_FIELD_SIZE.y-1 from neighbor
             NeighborFace::NegY => (
                 DENSITY_FIELD_SIZE.x,
                 DENSITY_FIELD_SIZE.z,
                 Box::new(|a: u32, b: u32| DensityField::index(a, DENSITY_FIELD_SIZE.y - 1, b))
                     as Box<dyn Fn(u32, u32) -> usize>,
             ),
-            // +Y face: sample y=0 from neighbor
             NeighborFace::PosY => (
                 DENSITY_FIELD_SIZE.x,
                 DENSITY_FIELD_SIZE.z,
                 Box::new(|a: u32, b: u32| DensityField::index(a, 0, b))
                     as Box<dyn Fn(u32, u32) -> usize>,
             ),
-            // -Z face: sample z=DENSITY_FIELD_SIZE.z-1 from neighbor
             NeighborFace::NegZ => (
                 DENSITY_FIELD_SIZE.x,
                 DENSITY_FIELD_SIZE.y,
                 Box::new(|a: u32, b: u32| DensityField::index(a, b, DENSITY_FIELD_SIZE.z - 1))
                     as Box<dyn Fn(u32, u32) -> usize>,
             ),
-            // +Z face: sample z=0 from neighbor
             NeighborFace::PosZ => (
                 DENSITY_FIELD_SIZE.x,
                 DENSITY_FIELD_SIZE.y,
@@ -280,12 +268,6 @@ impl NeighborSlice {
         }
 
         Self { data }
-    }
-
-    /// Get value from slice
-    #[inline]
-    pub fn get(&self, a: u32, b: u32, size_a: u32) -> f32 {
-        self.data[(a + b * size_a) as usize]
     }
 }
 
@@ -333,6 +315,291 @@ impl NeighborFace {
 }
 
 // ============================================================================
+// CPU-side Surface Nets (for now, until GPU readback is working)
+// ============================================================================
+
+/// Generate mesh on CPU - this is the fallback/working implementation
+fn generate_mesh_cpu(
+    field: &DensityField,
+    neighbors: &NeighborDensityFields,
+    mesh_size: Vec3,
+    chunk_offset: Vec3,
+) -> Option<Mesh> {
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut vertex_lookup = vec![NULL_VERTEX; FIELD_VOLUME];
+
+    let sample = |x: i32, y: i32, z: i32| -> f32 {
+        if DensityField::in_bounds(x, y, z) {
+            field.get(x as u32, y as u32, z as u32)
+        } else {
+            // Sample from neighbors
+            if x < 0 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegX as usize] {
+                    let idx = (y as u32 + z as u32 * DENSITY_FIELD_SIZE.y) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            } else if x >= DENSITY_FIELD_SIZE.x as i32 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosX as usize] {
+                    let idx = (y as u32 + z as u32 * DENSITY_FIELD_SIZE.y) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            }
+            if y < 0 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegY as usize] {
+                    let idx = (x as u32 + z as u32 * DENSITY_FIELD_SIZE.x) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            } else if y >= DENSITY_FIELD_SIZE.y as i32 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosY as usize] {
+                    let idx = (x as u32 + z as u32 * DENSITY_FIELD_SIZE.x) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            }
+            if z < 0 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegZ as usize] {
+                    let idx = (x as u32 + y as u32 * DENSITY_FIELD_SIZE.x) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            } else if z >= DENSITY_FIELD_SIZE.z as i32 {
+                if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosZ as usize] {
+                    let idx = (x as u32 + y as u32 * DENSITY_FIELD_SIZE.x) as usize;
+                    if idx < slice.data.len() {
+                        return slice.data[idx];
+                    }
+                }
+            }
+            1.0 // Outside
+        }
+    };
+
+    // Cube corners
+    const CORNERS: [[i32; 3]; 8] = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+        [0, 0, 1],
+        [1, 0, 1],
+        [0, 1, 1],
+        [1, 1, 1],
+    ];
+
+    const CORNER_VECS: [[f32; 3]; 8] = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ];
+
+    const EDGES: [[usize; 2]; 12] = [
+        [0, 1],
+        [0, 2],
+        [0, 4],
+        [1, 3],
+        [1, 5],
+        [2, 3],
+        [2, 6],
+        [3, 7],
+        [4, 5],
+        [4, 6],
+        [5, 7],
+        [6, 7],
+    ];
+
+    let grid_to_world = |gx: f32, gy: f32, gz: f32| -> [f32; 3] {
+        let scale = mesh_size / DENSITY_FIELD_SIZE.as_vec3();
+        [
+            gx * scale.x + chunk_offset.x,
+            gy * scale.y + chunk_offset.y,
+            gz * scale.z + chunk_offset.z,
+        ]
+    };
+
+    // Pass 1: Generate vertices
+    for z in 0..DENSITY_FIELD_SIZE.z {
+        for y in 0..DENSITY_FIELD_SIZE.y {
+            for x in 0..DENSITY_FIELD_SIZE.x {
+                let ix = x as i32;
+                let iy = y as i32;
+                let iz = z as i32;
+
+                // Sample 8 corners
+                let mut corner_dists = [0.0f32; 8];
+                let mut num_negative = 0;
+
+                for (i, c) in CORNERS.iter().enumerate() {
+                    corner_dists[i] = sample(ix + c[0], iy + c[1], iz + c[2]);
+                    if corner_dists[i] < 0.0 {
+                        num_negative += 1;
+                    }
+                }
+
+                let stride = DensityField::index(x, y, z);
+
+                // No surface crossing
+                if num_negative == 0 || num_negative == 8 {
+                    vertex_lookup[stride] = NULL_VERTEX;
+                    continue;
+                }
+
+                // Calculate centroid of edge intersections
+                let mut sum = [0.0f32; 3];
+                let mut count = 0.0;
+
+                for edge in &EDGES {
+                    let d1 = corner_dists[edge[0]];
+                    let d2 = corner_dists[edge[1]];
+
+                    if (d1 < 0.0) != (d2 < 0.0) {
+                        let t = d1 / (d1 - d2);
+                        let c1 = CORNER_VECS[edge[0]];
+                        let c2 = CORNER_VECS[edge[1]];
+                        sum[0] += c1[0] + t * (c2[0] - c1[0]);
+                        sum[1] += c1[1] + t * (c2[1] - c1[1]);
+                        sum[2] += c1[2] + t * (c2[2] - c1[2]);
+                        count += 1.0;
+                    }
+                }
+
+                let centroid = if count > 0.0 {
+                    [sum[0] / count, sum[1] / count, sum[2] / count]
+                } else {
+                    [0.5, 0.5, 0.5]
+                };
+
+                let grid_pos = [
+                    x as f32 + centroid[0],
+                    y as f32 + centroid[1],
+                    z as f32 + centroid[2],
+                ];
+                let world_pos = grid_to_world(grid_pos[0], grid_pos[1], grid_pos[2]);
+
+                // Calculate normal via gradient
+                let dx = sample(ix + 1, iy, iz) - sample(ix - 1, iy, iz);
+                let dy = sample(ix, iy + 1, iz) - sample(ix, iy - 1, iz);
+                let dz = sample(ix, iy, iz + 1) - sample(ix, iy, iz - 1);
+                let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                let normal = if len > 0.0001 {
+                    [dx / len, dy / len, dz / len]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+
+                vertex_lookup[stride] = positions.len() as u32;
+                positions.push(world_pos);
+                normals.push(normal);
+            }
+        }
+    }
+
+    if positions.is_empty() {
+        return None;
+    }
+
+    // Pass 2: Generate indices
+    let stride_x = 1u32;
+    let stride_y = DENSITY_FIELD_SIZE.x;
+    let stride_z = DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.y;
+
+    for z in 0..DENSITY_FIELD_SIZE.z {
+        for y in 0..DENSITY_FIELD_SIZE.y {
+            for x in 0..DENSITY_FIELD_SIZE.x {
+                let stride = DensityField::index(x, y, z);
+                let v0 = vertex_lookup[stride];
+
+                if v0 == NULL_VERTEX {
+                    continue;
+                }
+
+                let ix = x as i32;
+                let iy = y as i32;
+                let iz = z as i32;
+
+                let d0 = sample(ix, iy, iz);
+                let dx = sample(ix + 1, iy, iz);
+                let dy = sample(ix, iy + 1, iz);
+                let dz = sample(ix, iy, iz + 1);
+
+                // X-axis edge
+                if y > 0 && z > 0 && (d0 < 0.0) != (dx < 0.0) {
+                    let v1 = vertex_lookup[stride - stride_y as usize];
+                    let v2 = vertex_lookup[stride - stride_z as usize];
+                    let v3 = vertex_lookup[stride - stride_y as usize - stride_z as usize];
+
+                    if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
+                        if d0 < 0.0 {
+                            indices.extend_from_slice(&[v0, v3, v1, v0, v2, v3]);
+                        } else {
+                            indices.extend_from_slice(&[v0, v1, v3, v0, v3, v2]);
+                        }
+                    }
+                }
+
+                // Y-axis edge
+                if x > 0 && z > 0 && (d0 < 0.0) != (dy < 0.0) {
+                    let v1 = vertex_lookup[stride - stride_z as usize];
+                    let v2 = vertex_lookup[stride - stride_x as usize];
+                    let v3 = vertex_lookup[stride - stride_x as usize - stride_z as usize];
+
+                    if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
+                        if d0 < 0.0 {
+                            indices.extend_from_slice(&[v0, v3, v1, v0, v2, v3]);
+                        } else {
+                            indices.extend_from_slice(&[v0, v1, v3, v0, v3, v2]);
+                        }
+                    }
+                }
+
+                // Z-axis edge
+                if x > 0 && y > 0 && (d0 < 0.0) != (dz < 0.0) {
+                    let v1 = vertex_lookup[stride - stride_x as usize];
+                    let v2 = vertex_lookup[stride - stride_y as usize];
+                    let v3 = vertex_lookup[stride - stride_x as usize - stride_y as usize];
+
+                    if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
+                        if d0 < 0.0 {
+                            indices.extend_from_slice(&[v0, v3, v1, v0, v2, v3]);
+                        } else {
+                            indices.extend_from_slice(&[v0, v1, v3, v0, v3, v2]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if indices.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(indices));
+
+    Some(mesh)
+}
+
+// ============================================================================
 // Main World Systems
 // ============================================================================
 
@@ -358,7 +625,6 @@ fn gather_neighbor_fields(
 
             if let Some(neighbor_entity) = chunk_manager.get_chunk(&neighbor_pos) {
                 if let Ok(neighbor_field) = all_fields.get(neighbor_entity) {
-                    // Get the opposite face's boundary from neighbor
                     neighbors.neighbors[face as usize] =
                         Some(NeighborSlice::from_field(neighbor_field, face.opposite()));
                 }
@@ -369,18 +635,59 @@ fn gather_neighbor_fields(
     }
 }
 
-/// Clear dirty flag after extraction
-fn clear_dirty_after_extract(
+/// Process dirty chunks and generate meshes (CPU version)
+fn process_dirty_chunks(
     mut commands: Commands,
-    dirty: Query<Entity, With<DensityFieldDirty>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    dirty_chunks: Query<
+        (
+            Entity,
+            &ChunkPos,
+            &DensityField,
+            Option<&NeighborDensityFields>,
+        ),
+        With<DensityFieldDirty>,
+    >,
+    mesh_size: Res<DensityFieldMeshSize>,
+    existing_meshes: Query<&Mesh3d>,
 ) {
-    for entity in dirty.iter() {
+    for (entity, chunk_pos, field, neighbors) in dirty_chunks.iter() {
+        let neighbors = neighbors.cloned().unwrap_or_default();
+        let chunk_offset = chunk_pos.as_vec3() * mesh_size.0;
+
+        if let Some(mesh) = generate_mesh_cpu(field, &neighbors, mesh_size.0, chunk_offset) {
+            let mesh_handle = meshes.add(mesh);
+
+            // Check if entity already has a mesh
+            if existing_meshes.get(entity).is_ok() {
+                // Update existing mesh
+                commands.entity(entity).insert(Mesh3d(mesh_handle));
+            } else {
+                // Add new mesh and material
+                commands.entity(entity).insert((
+                    Mesh3d(mesh_handle),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.5, 0.7, 0.5),
+                        perceptual_roughness: 0.8,
+                        ..default()
+                    })),
+                ));
+            }
+        }
+
+        // Remove dirty flag
         commands.entity(entity).remove::<DensityFieldDirty>();
     }
 }
 
+/// Handle mesh readback (placeholder for GPU version)
+fn handle_mesh_readback() {
+    // This will be used when we implement GPU readback
+}
+
 // ============================================================================
-// Render World
+// Render World (GPU Compute - kept for future optimization)
 // ============================================================================
 
 #[derive(Resource, Default)]
@@ -410,21 +717,12 @@ pub struct GpuBufferStore {
 
 pub struct GpuFieldBuffers {
     pub entity: Entity,
-    pub sdf: Buffer,
-    pub neighbor_neg_x: Buffer,
-    pub neighbor_pos_x: Buffer,
-    pub neighbor_neg_y: Buffer,
-    pub neighbor_pos_y: Buffer,
-    pub neighbor_neg_z: Buffer,
-    pub neighbor_pos_z: Buffer,
-    pub neighbor_flags: Buffer, // Which neighbors are present
+    pub bind_group: BindGroup,
+    // Buffers stored here for future GPU readback
     pub positions: Buffer,
     pub normals: Buffer,
     pub indices: Buffer,
     pub counters: Buffer,
-    pub uniforms: Buffer,
-    pub vertex_lookup: Buffer,
-    pub bind_group: BindGroup,
 }
 
 #[repr(C)]
@@ -434,7 +732,7 @@ pub struct Uniforms {
     pub _pad0: f32,
     pub field_size: [u32; 3],
     pub _pad1: u32,
-    pub chunk_offset: [f32; 3], // World offset for this chunk
+    pub chunk_offset: [f32; 3],
     pub _pad2: f32,
 }
 
@@ -447,87 +745,35 @@ pub struct Counters {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct NeighborFlags {
-    pub flags: u32, // Bitmask: bit 0 = neg_x, bit 1 = pos_x, etc.
+pub struct NeighborFlagsGpu {
+    pub flags: u32,
     pub _pad: [u32; 3],
 }
 
-fn extract_fields(
-    mut extracted: ResMut<ExtractedFields>,
-    query: Query<
-        (Entity, &ChunkPos, &DensityField, &NeighborDensityFields),
-        With<DensityFieldDirty>,
-    >,
-    mesh_size: Res<DensityFieldMeshSize>,
-) {
+fn extract_fields(mut extracted: ResMut<ExtractedFields>) {
     extracted.fields.clear();
-    for (entity, chunk_pos, field, neighbors) in query.iter() {
-        extracted.fields.push(ExtractedField {
-            entity,
-            chunk_pos: chunk_pos.0,
-            data: field.0.clone(),
-            neighbors: neighbors.clone(),
-            mesh_size: mesh_size.0,
-        });
-    }
 }
 
-fn setup_pipeline(
-    mut commands: Commands,
-    render_device: Res<RenderDevice>,
-    asset_server: Res<AssetServer>,
-    pipeline_cache: Res<PipelineCache>,
-    mut pipeline: ResMut<SurfaceNetsPipeline>,
-) {
+fn setup_pipeline(render_device: Res<RenderDevice>, mut pipeline: ResMut<SurfaceNetsPipeline>) {
+    // Pipeline setup kept for future GPU compute implementation
     let layout = render_device.create_bind_group_layout(
         Some("surface_nets_layout"),
         &[
-            // 0: Main SDF
             bgl_entry(0, BufferBindingType::Storage { read_only: true }),
-            // 1-6: Neighbor slices (neg_x, pos_x, neg_y, pos_y, neg_z, pos_z)
             bgl_entry(1, BufferBindingType::Storage { read_only: true }),
             bgl_entry(2, BufferBindingType::Storage { read_only: true }),
             bgl_entry(3, BufferBindingType::Storage { read_only: true }),
             bgl_entry(4, BufferBindingType::Storage { read_only: true }),
             bgl_entry(5, BufferBindingType::Storage { read_only: true }),
             bgl_entry(6, BufferBindingType::Storage { read_only: true }),
-            // 7: Neighbor flags
             bgl_entry(7, BufferBindingType::Uniform),
-            // 8: Positions output
             bgl_entry(8, BufferBindingType::Storage { read_only: false }),
-            // 9: Normals output
             bgl_entry(9, BufferBindingType::Storage { read_only: false }),
-            // 10: Indices output
             bgl_entry(10, BufferBindingType::Storage { read_only: false }),
-            // 11: Counters
             bgl_entry(11, BufferBindingType::Storage { read_only: false }),
-            // 12: Uniforms
             bgl_entry(12, BufferBindingType::Uniform),
-            // 13: Vertex lookup
             bgl_entry(13, BufferBindingType::Storage { read_only: false }),
         ],
-    );
-
-    let shader = asset_server.load("shaders/surface_nets.wgsl");
-
-    pipeline.vertex_pass = Some(
-        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("surface_nets_vertex".into()),
-            layout: vec![layout.clone()],
-            shader: shader.clone(),
-            entry_point: Some("generate_vertices".into()),
-            ..default()
-        }),
-    );
-
-    pipeline.index_pass = Some(
-        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("surface_nets_index".into()),
-            layout: vec![layout.clone()],
-            shader,
-            entry_point: Some("generate_indices".into()),
-            ..default()
-        }),
     );
 
     pipeline.bind_group_layout = Some(layout);
@@ -546,307 +792,9 @@ fn bgl_entry(binding: u32, ty: BufferBindingType) -> BindGroupLayoutEntry {
     }
 }
 
-fn prepare_buffers(
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
-    pipeline: Res<SurfaceNetsPipeline>,
-    extracted: Res<ExtractedFields>,
-    mut store: ResMut<GpuBufferStore>,
+fn prepare_buffers(// Placeholder - CPU handles meshing for now
 ) {
-    let Some(layout) = &pipeline.bind_group_layout else {
-        return;
-    };
-
-    // Remove stale buffers
-    let extracted_entities: Vec<_> = extracted.fields.iter().map(|f| f.entity).collect();
-    store
-        .buffers
-        .retain(|b| extracted_entities.contains(&b.entity));
-
-    for field in &extracted.fields {
-        // Check if buffer exists
-        if let Some(buf) = store.buffers.iter_mut().find(|b| b.entity == field.entity) {
-            update_buffers(&render_queue, buf, field);
-        } else {
-            let buf = create_buffers(&render_device, &render_queue, layout, field);
-            store.buffers.push(buf);
-        }
-    }
 }
-
-fn neighbor_slice_size(face: NeighborFace) -> usize {
-    match face {
-        NeighborFace::NegX | NeighborFace::PosX => {
-            (DENSITY_FIELD_SIZE.y * DENSITY_FIELD_SIZE.z) as usize
-        }
-        NeighborFace::NegY | NeighborFace::PosY => {
-            (DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.z) as usize
-        }
-        NeighborFace::NegZ | NeighborFace::PosZ => {
-            (DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.y) as usize
-        }
-    }
-}
-
-fn create_buffers(
-    device: &RenderDevice,
-    queue: &RenderQueue,
-    layout: &BindGroupLayout,
-    field: &ExtractedField,
-) -> GpuFieldBuffers {
-    let sdf = device.create_buffer_with_data(&BufferInitDescriptor {
-        label: Some("sdf"),
-        contents: bytemuck::cast_slice(&field.data),
-        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-    });
-
-    // Create neighbor buffers (with dummy data if neighbor doesn't exist)
-    let create_neighbor = |face: NeighborFace| {
-        let size = neighbor_slice_size(face);
-        let data = field.neighbors.neighbors[face as usize]
-            .as_ref()
-            .map(|n| n.data.clone())
-            .unwrap_or_else(|| vec![1.0; size]); // Default to "outside"
-
-        device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some(&format!("neighbor_{:?}", face)),
-            contents: bytemuck::cast_slice(&data),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        })
-    };
-
-    let neighbor_neg_x = create_neighbor(NeighborFace::NegX);
-    let neighbor_pos_x = create_neighbor(NeighborFace::PosX);
-    let neighbor_neg_y = create_neighbor(NeighborFace::NegY);
-    let neighbor_pos_y = create_neighbor(NeighborFace::PosY);
-    let neighbor_neg_z = create_neighbor(NeighborFace::NegZ);
-    let neighbor_pos_z = create_neighbor(NeighborFace::PosZ);
-
-    // Build flags bitmask
-    let mut flags = 0u32;
-    for (i, neighbor) in field.neighbors.neighbors.iter().enumerate() {
-        if neighbor.is_some() {
-            flags |= 1 << i;
-        }
-    }
-    let neighbor_flags_data = NeighborFlags {
-        flags,
-        _pad: [0; 3],
-    };
-    let neighbor_flags = device.create_buffer_with_data(&BufferInitDescriptor {
-        label: Some("neighbor_flags"),
-        contents: bytemuck::bytes_of(&neighbor_flags_data),
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-    });
-
-    let positions = device.create_buffer(&BufferDescriptor {
-        label: Some("positions"),
-        size: (MAX_VERTICES * 3 * 4) as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::VERTEX | BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-
-    let normals = device.create_buffer(&BufferDescriptor {
-        label: Some("normals"),
-        size: (MAX_VERTICES * 3 * 4) as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::VERTEX | BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-
-    let indices = device.create_buffer(&BufferDescriptor {
-        label: Some("indices"),
-        size: (MAX_INDICES * 4) as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::INDEX | BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-
-    let counters = device.create_buffer_with_data(&BufferInitDescriptor {
-        label: Some("counters"),
-        contents: bytemuck::bytes_of(&Counters::default()),
-        usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
-    });
-
-    let uniforms_data = Uniforms {
-        mesh_size: field.mesh_size.into(),
-        _pad0: 0.0,
-        field_size: [
-            DENSITY_FIELD_SIZE.x,
-            DENSITY_FIELD_SIZE.y,
-            DENSITY_FIELD_SIZE.z,
-        ],
-        _pad1: 0,
-        chunk_offset: (field.chunk_pos.as_vec3() * field.mesh_size).into(),
-        _pad2: 0.0,
-    };
-    let uniforms = device.create_buffer_with_data(&BufferInitDescriptor {
-        label: Some("uniforms"),
-        contents: bytemuck::bytes_of(&uniforms_data),
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-    });
-
-    let vertex_lookup = device.create_buffer(&BufferDescriptor {
-        label: Some("vertex_lookup"),
-        size: (FIELD_VOLUME * 4) as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    // Init to NULL_VERTEX
-    queue.write_buffer(
-        &vertex_lookup,
-        0,
-        bytemuck::cast_slice(&vec![NULL_VERTEX; FIELD_VOLUME]),
-    );
-
-    let bind_group = device.create_bind_group(
-        Some("surface_nets_bind_group"),
-        layout,
-        &[
-            BindGroupEntry {
-                binding: 0,
-                resource: sdf.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: neighbor_neg_x.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: neighbor_pos_x.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: neighbor_neg_y.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 4,
-                resource: neighbor_pos_y.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 5,
-                resource: neighbor_neg_z.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 6,
-                resource: neighbor_pos_z.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 7,
-                resource: neighbor_flags.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 8,
-                resource: positions.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 9,
-                resource: normals.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 10,
-                resource: indices.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 11,
-                resource: counters.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 12,
-                resource: uniforms.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 13,
-                resource: vertex_lookup.as_entire_binding(),
-            },
-        ],
-    );
-
-    GpuFieldBuffers {
-        entity: field.entity,
-        sdf,
-        neighbor_neg_x,
-        neighbor_pos_x,
-        neighbor_neg_y,
-        neighbor_pos_y,
-        neighbor_neg_z,
-        neighbor_pos_z,
-        neighbor_flags,
-        positions,
-        normals,
-        indices,
-        counters,
-        uniforms,
-        vertex_lookup,
-        bind_group,
-    }
-}
-
-fn update_buffers(queue: &RenderQueue, buf: &GpuFieldBuffers, field: &ExtractedField) {
-    queue.write_buffer(&buf.sdf, 0, bytemuck::cast_slice(&field.data));
-
-    // Update neighbors
-    for face in NeighborFace::ALL {
-        let size = neighbor_slice_size(face);
-        let data = field.neighbors.neighbors[face as usize]
-            .as_ref()
-            .map(|n| n.data.clone())
-            .unwrap_or_else(|| vec![1.0; size]);
-
-        let buffer = match face {
-            NeighborFace::NegX => &buf.neighbor_neg_x,
-            NeighborFace::PosX => &buf.neighbor_pos_x,
-            NeighborFace::NegY => &buf.neighbor_neg_y,
-            NeighborFace::PosY => &buf.neighbor_pos_y,
-            NeighborFace::NegZ => &buf.neighbor_neg_z,
-            NeighborFace::PosZ => &buf.neighbor_pos_z,
-        };
-        queue.write_buffer(buffer, 0, bytemuck::cast_slice(&data));
-    }
-
-    // Update flags
-    let mut flags = 0u32;
-    for (i, neighbor) in field.neighbors.neighbors.iter().enumerate() {
-        if neighbor.is_some() {
-            flags |= 1 << i;
-        }
-    }
-    queue.write_buffer(
-        &buf.neighbor_flags,
-        0,
-        bytemuck::bytes_of(&NeighborFlags {
-            flags,
-            _pad: [0; 3],
-        }),
-    );
-
-    // Reset counters
-    queue.write_buffer(&buf.counters, 0, bytemuck::bytes_of(&Counters::default()));
-
-    // Reset vertex lookup
-    queue.write_buffer(
-        &buf.vertex_lookup,
-        0,
-        bytemuck::cast_slice(&vec![NULL_VERTEX; FIELD_VOLUME]),
-    );
-
-    // Update uniforms
-    let uniforms = Uniforms {
-        mesh_size: field.mesh_size.into(),
-        _pad0: 0.0,
-        field_size: [
-            DENSITY_FIELD_SIZE.x,
-            DENSITY_FIELD_SIZE.y,
-            DENSITY_FIELD_SIZE.z,
-        ],
-        _pad1: 0,
-        chunk_offset: (field.chunk_pos.as_vec3() * field.mesh_size).into(),
-        _pad2: 0.0,
-    };
-    queue.write_buffer(&buf.uniforms, 0, bytemuck::bytes_of(&uniforms));
-}
-
-// ============================================================================
-// Compute Node
-// ============================================================================
 
 #[derive(Default)]
 pub struct SurfaceNetsNode;
@@ -855,60 +803,10 @@ impl bevy::render::render_graph::Node for SurfaceNetsNode {
     fn run(
         &self,
         _graph: &mut bevy::render::render_graph::RenderGraphContext,
-        render_context: &mut bevy::render::renderer::RenderContext,
-        world: &World,
+        _render_context: &mut bevy::render::renderer::RenderContext,
+        _world: &World,
     ) -> Result<(), bevy::render::render_graph::NodeRunError> {
-        let pipeline_cache = world.resource::<PipelineCache>();
-        let pipeline = world.resource::<SurfaceNetsPipeline>();
-        let store = world.resource::<GpuBufferStore>();
-
-        let (Some(vertex_id), Some(index_id)) = (pipeline.vertex_pass, pipeline.index_pass) else {
-            return Ok(());
-        };
-
-        let (Some(vertex_pipeline), Some(index_pipeline)) = (
-            pipeline_cache.get_compute_pipeline(vertex_id),
-            pipeline_cache.get_compute_pipeline(index_id),
-        ) else {
-            return Ok(());
-        };
-
-        let workgroups = (
-            DENSITY_FIELD_SIZE.x.div_ceil(WORKGROUP_SIZE),
-            DENSITY_FIELD_SIZE.y.div_ceil(WORKGROUP_SIZE),
-            DENSITY_FIELD_SIZE.z.div_ceil(WORKGROUP_SIZE),
-        );
-
-        for buf in &store.buffers {
-            // Pass 1: Generate vertices
-            {
-                let mut pass =
-                    render_context
-                        .command_encoder()
-                        .begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("surface_nets_vertex"),
-                            ..default()
-                        });
-                pass.set_pipeline(vertex_pipeline);
-                pass.set_bind_group(0, &buf.bind_group, &[]);
-                pass.dispatch_workgroups(workgroups.0, workgroups.1, workgroups.2);
-            }
-
-            // Pass 2: Generate indices
-            {
-                let mut pass =
-                    render_context
-                        .command_encoder()
-                        .begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("surface_nets_index"),
-                            ..default()
-                        });
-                pass.set_pipeline(index_pipeline);
-                pass.set_bind_group(0, &buf.bind_group, &[]);
-                pass.dispatch_workgroups(workgroups.0, workgroups.1, workgroups.2);
-            }
-        }
-
+        // GPU compute disabled for now - CPU handles meshing
         Ok(())
     }
 }
