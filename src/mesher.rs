@@ -40,87 +40,70 @@ pub fn generate_mesh_cpu(
         (x + y * extended_size.x + z * extended_size.x * extended_size.y) as usize
     };
 
-    // Sample function that handles neighbor lookups
+    let size_x = DENSITY_FIELD_SIZE.x as i32;
+    let size_y = DENSITY_FIELD_SIZE.y as i32;
+    let size_z = DENSITY_FIELD_SIZE.z as i32;
+
+    // Sample function that handles neighbor lookups with proper depth
     let sample = |x: i32, y: i32, z: i32| -> f32 {
         // In bounds - direct sample
-        if DensityField::in_bounds(x, y, z) {
+        if x >= 0 && y >= 0 && z >= 0 && x < size_x && y < size_y && z < size_z {
             return field.get(x as u32, y as u32, z as u32);
         }
 
-        // Out of bounds - check neighbors
         // -X neighbor (x < 0)
-        if x < 0
-            && y >= 0
-            && z >= 0
-            && (y as u32) < DENSITY_FIELD_SIZE.y
-            && (z as u32) < DENSITY_FIELD_SIZE.z
-        {
+        if x < 0 && y >= 0 && z >= 0 && y < size_y && z < size_z {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegX as usize] {
-                return slice.get(y as u32, z as u32);
+                // depth = how far into negative x: x=-1 -> depth=0, x=-2 -> depth=1
+                let depth = (-1 - x) as u32;
+                return slice.get(y as u32, z as u32, depth);
             }
         }
 
         // +X neighbor (x >= SIZE)
-        if x >= DENSITY_FIELD_SIZE.x as i32
-            && y >= 0
-            && z >= 0
-            && (y as u32) < DENSITY_FIELD_SIZE.y
-            && (z as u32) < DENSITY_FIELD_SIZE.z
-        {
+        if x >= size_x && y >= 0 && z >= 0 && y < size_y && z < size_z {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosX as usize] {
-                return slice.get(y as u32, z as u32);
+                // depth = how far past SIZE: x=SIZE -> depth=0, x=SIZE+1 -> depth=1
+                let depth = (x - size_x) as u32;
+                return slice.get(y as u32, z as u32, depth);
             }
         }
 
         // -Y neighbor (y < 0)
-        if y < 0
-            && x >= 0
-            && z >= 0
-            && (x as u32) < DENSITY_FIELD_SIZE.x
-            && (z as u32) < DENSITY_FIELD_SIZE.z
-        {
+        if y < 0 && x >= 0 && z >= 0 && x < size_x && z < size_z {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegY as usize] {
-                return slice.get(x as u32, z as u32);
+                let depth = (-1 - y) as u32;
+                return slice.get(x as u32, z as u32, depth);
             }
         }
 
         // +Y neighbor (y >= SIZE)
-        if y >= DENSITY_FIELD_SIZE.y as i32
-            && x >= 0
-            && z >= 0
-            && (x as u32) < DENSITY_FIELD_SIZE.x
-            && (z as u32) < DENSITY_FIELD_SIZE.z
-        {
+        if y >= size_y && x >= 0 && z >= 0 && x < size_x && z < size_z {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosY as usize] {
-                return slice.get(x as u32, z as u32);
+                let depth = (y - size_y) as u32;
+                return slice.get(x as u32, z as u32, depth);
             }
         }
 
         // -Z neighbor (z < 0)
-        if z < 0
-            && x >= 0
-            && y >= 0
-            && (x as u32) < DENSITY_FIELD_SIZE.x
-            && (y as u32) < DENSITY_FIELD_SIZE.y
-        {
+        if z < 0 && x >= 0 && y >= 0 && x < size_x && y < size_y {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegZ as usize] {
-                return slice.get(x as u32, y as u32);
+                let depth = (-1 - z) as u32;
+                return slice.get(x as u32, y as u32, depth);
             }
         }
 
         // +Z neighbor (z >= SIZE)
-        if z >= DENSITY_FIELD_SIZE.z as i32
-            && x >= 0
-            && y >= 0
-            && (x as u32) < DENSITY_FIELD_SIZE.x
-            && (y as u32) < DENSITY_FIELD_SIZE.y
-        {
+        if z >= size_z && x >= 0 && y >= 0 && x < size_x && y < size_y {
             if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosZ as usize] {
-                return slice.get(x as u32, y as u32);
+                let depth = (z - size_z) as u32;
+                return slice.get(x as u32, y as u32, depth);
             }
         }
 
-        1.0 // Outside (no neighbor data available)
+        // Edge/corner cases involving multiple neighbors - return outside
+        // These could be handled with additional neighbor data but are less critical
+        1.0
     };
 
     // Cube corners (offsets from voxel origin)
