@@ -2,7 +2,7 @@
 // https://github.com/bonsairobo/fast-surface-nets-rs
 // Original work Copyright 2021 bonsairobo, dual-licensed MIT/Apache-2.0
 use bevy::prelude::*;
-pub use chunky::prelude::{ChunkManager, ChunkPos};
+pub use chunky_bevy::prelude::{ChunkManager, ChunkPos};
 
 use crate::{
     mesher::DensityFieldMeshSize,

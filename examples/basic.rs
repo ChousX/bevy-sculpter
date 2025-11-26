@@ -1,7 +1,7 @@
 // examples/basic.rs
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use chunky::prelude::*;
+use chunky_bevy::prelude::*;
 use sculpter::prelude::*;
 
 fn main() {

@@ -1757,8 +1757,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "chunky"
+name = "chunky-bevy"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e29f1edb9385cfd1160c24ce7a9bddd5e401dc0cf102c584c8af82ca44934ded"
 dependencies = [
  "bevy",
 ]
@@ -4084,7 +4086,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bytemuck",
- "chunky",
+ "chunky-bevy",
 ]
 
 [[package]]
