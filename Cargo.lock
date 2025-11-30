@@ -325,6 +325,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy-sculpter"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bytemuck",
+ "chunky-bevy",
+]
+
+[[package]]
 name = "bevy_a11y"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4078,15 +4087,6 @@ dependencies = [
  "memmap2",
  "smithay-client-toolkit",
  "tiny-skia",
-]
-
-[[package]]
-name = "sculpter"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bytemuck",
- "chunky-bevy",
 ]
 
 [[package]]

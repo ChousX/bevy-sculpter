@@ -1,5 +1,5 @@
 {
-  description = "sculpter";
+  description = "bevy-sculpter";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -83,12 +83,6 @@
             vulkan-loader
           ])}"
         '';
-      };
-    });
-    apps = forEachSystem ({pkgs, ...}: {
-      default = {
-        type = "app";
-        program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/sculpter";
       };
     });
   };

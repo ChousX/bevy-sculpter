@@ -1,8 +1,8 @@
 // examples/basic.rs
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+use bevy_sculpter::prelude::*;
 use chunky_bevy::prelude::*;
-use sculpter::prelude::*;
 
 fn main() {
     App::new()
@@ -47,7 +47,7 @@ fn setup(mut commands: Commands) {
                 let sphere_center = vec3(0.0, 0.0, 0.0);
                 let local_sphere_center = sphere_center - global_offset + local_center;
 
-                sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
+                bevy_sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
                 commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, DensityFieldDirty));
             }
         }
