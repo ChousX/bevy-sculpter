@@ -4,7 +4,7 @@ use bevy::{
 };
 
 use crate::{
-    DENSITY_FIELD_SIZE, FIELD_VOLUME, NULL_VERTEX,
+    DENSITY_FIELD_SIZE, NULL_VERTEX,
     density_field::DensityField,
     neighbor::{NeighborDensityFields, NeighborFace},
 };

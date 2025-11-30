@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub mod density_field;
-pub mod helppers;
+pub mod helpers;
 pub mod mesher;
 pub mod neighbor;
 
@@ -24,7 +24,7 @@ pub mod prelude {
     };
 }
 
-/// Size of the density field grid per chunk (no padding)
+/// Size of the density field grid per chunk
 pub const DENSITY_FIELD_SIZE: UVec3 = uvec3(32, 32, 32);
 
 /// Total voxels per chunk
