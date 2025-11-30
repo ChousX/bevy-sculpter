@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub mod density_field;
+pub mod helppers;
 pub mod mesher;
 pub mod neighbor;
 
