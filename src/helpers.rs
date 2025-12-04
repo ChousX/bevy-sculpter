@@ -37,7 +37,7 @@ pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32,
                 let new_val = if add {
                     current.min(sphere_sdf)
                 } else {
-                    current.max(sphere_sdf)
+                    current.max(-sphere_sdf)
                 };
                 density_field.set(x as u32, y as u32, z as u32, new_val);
             }
