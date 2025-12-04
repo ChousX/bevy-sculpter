@@ -20,12 +20,16 @@ fn main() {
         .add_plugins(SurfaceNetsPlugin)
         .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
         .init_resource::<SculptBrush>()
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, show_chunks))
         .add_systems(
             Update,
             (fly_camera, sculpt_terrain, update_brush_preview, ui_text),
         )
         .run();
+}
+
+fn show_chunks(mut show_chunks: ResMut<NextState<ChunkBoundryVisualizer>>) {
+    show_chunks.set(ChunkBoundryVisualizer::On);
 }
 
 #[derive(Resource)]
@@ -263,32 +267,7 @@ fn sculpt_terrain(
             continue;
         }
 
-        // Apply CSG operation directly
-        // Add (union): min(current, sphere_sdf) - fills in material
-        // Remove (subtraction): max(current, sphere_sdf) - carves out material
-        let min = (grid_center - Vec3::splat(grid_radius + 1.0))
-            .max(Vec3::ZERO)
-            .as_ivec3();
-        let max = (grid_center + Vec3::splat(grid_radius + 1.0))
-            .min(Vec3::splat(31.0))
-            .as_ivec3();
-
-        for z in min.z..=max.z {
-            for y in min.y..=max.y {
-                for x in min.x..=max.x {
-                    let pos = vec3(x as f32, y as f32, z as f32);
-                    let sphere_sdf = pos.distance(grid_center) - grid_radius;
-                    let current = field.get(x as u32, y as u32, z as u32);
-
-                    let new_val = if adding {
-                        current.min(sphere_sdf) // Union
-                    } else {
-                        current.max(sphere_sdf) // Subtraction (note: no negation)
-                    };
-                    field.set(x as u32, y as u32, z as u32, new_val);
-                }
-            }
-        }
+        bevy_sculpter::helpers::brush_sphere(&mut field, grid_center, grid_radius, adding);
     }
 
     // Mark all chunks dirty
