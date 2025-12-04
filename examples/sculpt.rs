@@ -1,16 +1,15 @@
 //! Interactive 3D sculpting example with smooth brushes.
 //!
 //! Controls:
-//! - Left click + drag: Rotate camera
+//! - Middle click + drag: Rotate camera
 //! - Right click (hold): Smooth add material
 //! - Middle click (hold): Smooth remove material  
 //! - Shift + Right click: Hard add (CSG union)
-//! - Shift + Middle click: Hard remove (CSG subtract)
+//! - Shift + Left click: Hard remove (CSG subtract)
 //! - B: Toggle blur/smooth brush
 //! - Scroll wheel: Adjust brush size
 //! - [ / ]: Adjust brush strength
 //! - WASD/Space/Shift: Move camera
-//! - Ctrl: Speed boost
 
 use bevy::{
     input::mouse::{MouseMotion, MouseWheel},
@@ -188,7 +187,7 @@ fn fly_camera(
         brush.strength = (brush.strength + 1.0).min(brush.max_strength);
     }
 
-    if mouse_buttons.pressed(MouseButton::Left) {
+    if mouse_buttons.pressed(MouseButton::Middle) {
         for motion in mouse_motion.read() {
             fly_cam.yaw -= motion.delta.x * fly_cam.sensitivity;
             fly_cam.pitch -= motion.delta.y * fly_cam.sensitivity;
@@ -226,14 +225,8 @@ fn fly_camera(
         velocity -= Vec3::Y;
     }
 
-    let speed = if keyboard.pressed(KeyCode::ControlLeft) {
-        fly_cam.speed * 3.0
-    } else {
-        fly_cam.speed
-    };
-
     if velocity.length_squared() > 0.0 {
-        velocity = velocity.normalize() * speed * time.delta_secs();
+        velocity = velocity.normalize() * fly_cam.speed * time.delta_secs();
         transform.translation += velocity;
     }
 }
@@ -251,7 +244,7 @@ fn sculpt_terrain(
     chunk_entities: Query<Entity, With<ChunkPos>>,
 ) {
     let adding = mouse_buttons.pressed(MouseButton::Right);
-    let removing = mouse_buttons.pressed(MouseButton::Middle);
+    let removing = mouse_buttons.pressed(MouseButton::Left);
 
     if !adding && !removing {
         return;
@@ -277,7 +270,7 @@ fn sculpt_terrain(
     let world_brush_radius = brush.radius;
     let chunk_world_size = mesh_size.0;
     let use_hard_brush =
-        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
 
     for (chunk_pos, mut field) in chunks.iter_mut() {
         let chunk_world_origin = chunk_pos.0.as_vec3() * chunk_world_size;
@@ -451,17 +444,16 @@ fn ui_text(brush: Res<SculptBrush>, mut text_q: Query<&mut Text, With<UiText>>) 
 
     *text = Text::new(format!(
         "Sculpt Controls:\n\
-         Left Click + Drag: Rotate camera\n\
+         Middle Click + Drag: Rotate camera\n\
          Right Click (hold): Add material\n\
-         Middle Click (hold): Remove material\n\
-         Shift + Click: Hard brush (instant CSG)\n\
+         Left Click (hold): Remove material\n\
+         Ctrl + Click: Hard brush (instant CSG)\n\
          \n\
          B: Toggle brush mode\n\
          Scroll: Brush size ({:.1})\n\
-         [ / ]: Brush strength ({:.1})\n\
+         [ ]: Brush strength ({:.1})\n\
          \n\
-         Mode: {}\n\
-         WASD/Space/Shift: Move | Ctrl: Speed",
+         Mode: {}",
         brush.radius, brush.strength, mode_str
     ));
 }
