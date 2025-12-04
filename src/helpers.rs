@@ -2,10 +2,10 @@
 //!
 //! This module provides various brush types for interactive sculpting:
 //!
-//! - [`brush_sphere`] - Hard CSG add/subtract operations (instant)
-//! - [`brush_smooth`] / [`brush_smooth_timed`] - Continuous smooth sculpting
-//! - [`brush_blur`] - Surface smoothing
-//! - [`brush_flatten`] - Terrain flattening toward a target height
+//! - Hard CSG add/subtract operations via [`brush_sphere`]
+//! - Continuous smooth sculpting via [`brush_smooth`] and [`brush_smooth_timed`]
+//! - Surface smoothing via [`brush_blur`]
+//! - Terrain flattening via [`brush_flatten`]
 //!
 //! # Coordinate System
 //!

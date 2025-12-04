@@ -149,10 +149,11 @@ fn gather_neighbor_fields(
             let neighbor_pos = chunk_pos.0 + face.offset();
 
             if let Some(neighbor_entity) = chunk_manager.get_chunk(&neighbor_pos)
-                && let Ok(neighbor_field) = all_fields.get(neighbor_entity) {
-                    neighbors.neighbors[face as usize] =
-                        Some(NeighborSlice::from_field(neighbor_field, face));
-                }
+                && let Ok(neighbor_field) = all_fields.get(neighbor_entity)
+            {
+                neighbors.neighbors[face as usize] =
+                    Some(NeighborSlice::from_field(neighbor_field, face));
+            }
         }
 
         commands.entity(entity).insert(neighbors);

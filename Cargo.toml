@@ -1,10 +1,10 @@
 [package]
 name = "bevy-sculpter"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "SDF-based voxel sculpting and Surface Nets meshing for Bevy"
-repository = "https://github.com/YOUR_USERNAME/bevy-sculpter"
+repository = "https://github.com/ChousX/bevy-sculpter"
 readme = "README.md"
 keywords = ["bevy", "voxel", "sdf", "sculpting", "mesh"]
 categories = ["game-development", "rendering::data-formats"]
