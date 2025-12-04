@@ -12,8 +12,8 @@ categories = ["game-development", "rendering::data-formats"]
 [dependencies]
 bevy = { version = "0.17", features = ["wayland"] }
 bytemuck = "1.24.0"
-# chunky = {git = "https://github.com/ChousX/chunky"}
 chunky-bevy = "0.1"
+
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
