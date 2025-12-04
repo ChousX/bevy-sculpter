@@ -1,7 +1,35 @@
+//! Density field storage and operations for SDF-based volumetric data.
+//!
+//! The [`DensityField`] component stores signed distance field (SDF) values on a 3D grid.
+//! Negative values represent the interior of a shape, positive values the exterior,
+//! and the zero-crossing defines the surface.
+
 use crate::{DENSITY_FIELD_SIZE, FIELD_VOLUME};
 use bevy::prelude::*;
 
-/// The density field (SDF). Negative = inside, Positive = outside.
+/// A 3D grid of signed distance field (SDF) values.
+///
+/// Each voxel stores a floating-point density value where:
+/// - **Negative** = inside the surface
+/// - **Positive** = outside the surface  
+/// - **Zero** = on the surface
+///
+/// The field is stored as a flat `Vec<f32>` in X-Y-Z order (X varies fastest).
+///
+/// # Example
+///
+/// ```
+/// use bevy_sculpter::prelude::*;
+///
+/// let mut field = DensityField::new();
+///
+/// // Set a single voxel to be inside
+/// field.set(16, 16, 16, -1.0);
+///
+/// // Query a voxel
+/// let density = field.get(16, 16, 16);
+/// assert!(density < 0.0); // Inside
+/// ```
 #[derive(Component, Clone, Deref, DerefMut, Debug)]
 pub struct DensityField(pub Vec<f32>);
 
@@ -12,19 +40,30 @@ impl Default for DensityField {
 }
 
 impl DensityField {
+    /// Creates a new density field with all voxels set to exterior (1.0).
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Creates a density field with all voxels set to the given value.
+    ///
+    /// # Arguments
+    /// * `value` - The density value for all voxels (negative = inside, positive = outside)
     pub fn filled(value: f32) -> Self {
         Self(vec![value; FIELD_VOLUME])
     }
 
+    /// Computes the flat array index for a given (x, y, z) coordinate.
+    ///
+    /// Uses X-Y-Z ordering where X varies fastest.
     #[inline]
     pub fn index(x: u32, y: u32, z: u32) -> usize {
         (x + y * DENSITY_FIELD_SIZE.x + z * DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.y) as usize
     }
 
+    /// Checks if signed coordinates are within the field bounds.
+    ///
+    /// Useful when sampling neighbors that might be outside the grid.
     #[inline]
     pub fn in_bounds(x: i32, y: i32, z: i32) -> bool {
         x >= 0
@@ -35,6 +74,9 @@ impl DensityField {
             && (z as u32) < DENSITY_FIELD_SIZE.z
     }
 
+    /// Sets the density value at the given coordinates.
+    ///
+    /// Silently ignores out-of-bounds coordinates.
     #[inline]
     pub fn set(&mut self, x: u32, y: u32, z: u32, value: f32) {
         if x < DENSITY_FIELD_SIZE.x && y < DENSITY_FIELD_SIZE.y && z < DENSITY_FIELD_SIZE.z {
@@ -42,6 +84,9 @@ impl DensityField {
         }
     }
 
+    /// Gets the density value at the given coordinates.
+    ///
+    /// Returns `1.0` (exterior) for out-of-bounds coordinates.
     #[inline]
     pub fn get(&self, x: u32, y: u32, z: u32) -> f32 {
         if x < DENSITY_FIELD_SIZE.x && y < DENSITY_FIELD_SIZE.y && z < DENSITY_FIELD_SIZE.z {
@@ -51,7 +96,9 @@ impl DensityField {
         }
     }
 
-    /// Get with signed coords (for neighbor sampling)
+    /// Gets the density value using signed coordinates.
+    ///
+    /// Returns `None` for out-of-bounds coordinates, useful for neighbor sampling.
     #[inline]
     pub fn get_signed(&self, x: i32, y: i32, z: i32) -> Option<f32> {
         if Self::in_bounds(x, y, z) {
@@ -61,16 +108,17 @@ impl DensityField {
         }
     }
 }
+
 /// Result of finding the nearest interior point in a density field.
 #[derive(Clone, Copy, Debug)]
 pub struct NearestInteriorResult {
-    /// Grid coordinates of the nearest interior voxel
+    /// Grid coordinates of the nearest interior voxel.
     pub grid_pos: UVec3,
-    /// World-space position of the nearest interior voxel center
+    /// World-space position of the nearest interior voxel center.
     pub world_pos: Vec3,
-    /// The density value at this point (negative = inside)
+    /// The density value at this point (negative = inside).
     pub density: f32,
-    /// Squared distance from query point to this voxel (in grid space)
+    /// Squared distance from query point to this voxel (in grid space).
     pub distance_sq: f32,
 }
 
@@ -132,15 +180,20 @@ fn solve_eikonal(a: f32, b: f32, c: f32, h: f32) -> f32 {
         a + h
     }
 }
+
 impl DensityField {
     // =========================================================================
     // Nearest Interior Queries
     // =========================================================================
 
-    /// Find the nearest voxel with negative density (inside mesh) via brute force.
+    /// Finds the nearest voxel with negative density (inside mesh) via brute force.
     ///
-    /// O(n³) - checks every voxel. Use `nearest_interior_bounded` or
-    /// `raycast_dda` for better performance when possible.
+    /// **Complexity**: O(n³) - checks every voxel. Use [`Self::nearest_interior_bounded`]
+    /// or [`Self::raycast_dda`] for better performance when possible.
+    ///
+    /// # Arguments
+    /// * `world_pos` - Query position in world space
+    /// * `mesh_size` - World-space dimensions of the density field
     pub fn nearest_interior(
         &self,
         world_pos: Vec3,
@@ -178,9 +231,14 @@ impl DensityField {
         best
     }
 
-    /// Find nearest interior voxel within a maximum search radius.
+    /// Finds the nearest interior voxel within a maximum search radius.
     ///
-    /// More efficient than `nearest_interior` for localized queries.
+    /// More efficient than [`Self::nearest_interior`] for localized queries.
+    ///
+    /// # Arguments
+    /// * `world_pos` - Query position in world space
+    /// * `mesh_size` - World-space dimensions of the density field
+    /// * `max_radius` - Maximum search radius in world space
     pub fn nearest_interior_bounded(
         &self,
         world_pos: Vec3,
@@ -232,7 +290,9 @@ impl DensityField {
         best
     }
 
-    /// Find the deepest interior voxel (most negative density).
+    /// Finds the deepest interior voxel (most negative density).
+    ///
+    /// Useful for finding the "center" of a shape defined by the SDF.
     pub fn deepest_interior(&self, mesh_size: Vec3) -> Option<NearestInteriorResult> {
         let inv_scale = mesh_size / DENSITY_FIELD_SIZE.as_vec3();
         let mut best: Option<(UVec3, f32)> = None;
@@ -267,10 +327,17 @@ impl DensityField {
     // Raycasting
     // =========================================================================
 
-    /// Find interior point by sphere-tracing along a ray.
+    /// Finds an interior point by sphere-tracing along a ray.
     ///
-    /// Fast for well-formed SDFs. Uses density values as step sizes.
-    /// For non-Euclidean fields, use `raycast_dda` instead.
+    /// Fast for well-formed SDFs where density values represent actual distances.
+    /// Uses density values as step sizes for efficient traversal.
+    /// For non-Euclidean fields, use [`Self::raycast_dda`] instead.
+    ///
+    /// # Arguments
+    /// * `world_pos` - Ray origin in world space
+    /// * `direction` - Ray direction (will be normalized)
+    /// * `mesh_size` - World-space dimensions of the density field
+    /// * `max_steps` - Maximum number of sphere-trace iterations
     pub fn raycast_to_interior(
         &self,
         world_pos: Vec3,
@@ -329,7 +396,9 @@ impl DensityField {
         None
     }
 
-    /// Sphere-trace toward field center.
+    /// Sphere-traces toward the field center.
+    ///
+    /// Convenience wrapper around [`Self::raycast_to_interior`] that aims at the center.
     pub fn raycast_to_center(
         &self,
         world_pos: Vec3,
@@ -340,10 +409,17 @@ impl DensityField {
         self.raycast_to_interior(world_pos, center - world_pos, mesh_size, max_steps)
     }
 
-    /// Find interior point using DDA (3D Bresenham) traversal.
+    /// Finds an interior point using DDA (3D Bresenham) traversal.
     ///
     /// Robust for any density field - doesn't rely on SDF values for stepping.
-    /// Visits every voxel the ray passes through.
+    /// Visits every voxel the ray passes through, making it reliable but slower
+    /// than sphere-tracing for well-formed SDFs.
+    ///
+    /// # Arguments
+    /// * `world_pos` - Ray origin in world space
+    /// * `direction` - Ray direction (will be normalized)
+    /// * `mesh_size` - World-space dimensions of the density field
+    /// * `max_steps` - Maximum number of voxels to traverse
     pub fn raycast_dda(
         &self,
         world_pos: Vec3,
@@ -469,7 +545,9 @@ impl DensityField {
         None
     }
 
-    /// DDA raycast toward field center.
+    /// DDA raycast toward the field center.
+    ///
+    /// Convenience wrapper around [`Self::raycast_dda`] that aims at the center.
     pub fn raycast_dda_to_center(
         &self,
         world_pos: Vec3,
@@ -484,7 +562,7 @@ impl DensityField {
     // SDF Redistancing (Fast Sweeping Method)
     // =========================================================================
 
-    /// Redistribute the SDF to restore proper Euclidean distances.
+    /// Redistributes the SDF to restore proper Euclidean distances.
     ///
     /// Uses the Fast Sweeping Method to compute accurate signed distances
     /// from the current zero-crossing (surface). Call after CSG operations,
@@ -493,6 +571,20 @@ impl DensityField {
     /// # Performance
     /// - 32³ field: ~0.5-1ms
     /// - 64³ field: ~4-8ms
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bevy_sculpter::prelude::*;
+    ///
+    /// let mut field = DensityField::new();
+    /// // ... perform CSG operations that break SDF property ...
+    ///
+    /// // Check if redistancing is needed
+    /// if field.sdf_quality() > 0.3 {
+    ///     field.redistribute_sdf();
+    /// }
+    /// ```
     pub fn redistribute_sdf(&mut self) {
         let sx = DENSITY_FIELD_SIZE.x as usize;
         let sy = DENSITY_FIELD_SIZE.y as usize;
@@ -702,16 +794,21 @@ impl DensityField {
         }
 
         // Step 3: Write back preserving original signs
-        for i in 0..FIELD_VOLUME {
+        for (i, d) in dist.into_iter().enumerate() {
             let sign = if self.0[i] < 0.0 { -1.0 } else { 1.0 };
-            self.0[i] = sign * dist[i].abs();
+            self.0[i] = sign * d.abs();
         }
     }
 
-    /// Check SDF quality by measuring gradient magnitude deviation from 1.0.
+    /// Checks SDF quality by measuring gradient magnitude deviation from 1.0.
     ///
-    /// Returns average error. Values close to 0.0 = proper distance field.
-    /// Values > 0.3 suggest `redistribute_sdf()` may help.
+    /// A proper signed distance field has gradient magnitude of 1.0 everywhere.
+    /// This method measures how far the field deviates from that ideal.
+    ///
+    /// # Returns
+    /// Average error value:
+    /// - Values close to `0.0` indicate a proper distance field
+    /// - Values > `0.3` suggest [`Self::redistribute_sdf`] may help
     pub fn sdf_quality(&self) -> f32 {
         let (sx, sy, sz) = (
             DENSITY_FIELD_SIZE.x,
@@ -743,6 +840,10 @@ impl DensityField {
     }
 }
 
-/// Marker: this chunk needs remeshing
+/// Marker component indicating this chunk needs remeshing.
+///
+/// Add this component to any entity with a [`DensityField`] to trigger
+/// mesh regeneration. The [`SurfaceNetsPlugin`](crate::SurfaceNetsPlugin)
+/// will automatically remove it after processing.
 #[derive(Component, Clone, Copy, Default, Debug)]
 pub struct DensityFieldDirty;

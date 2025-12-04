@@ -1,3 +1,25 @@
+//! Surface Nets mesh generation from density fields.
+//!
+//! This module implements the Surface Nets algorithm for generating smooth meshes
+//! from signed distance fields. Unlike Marching Cubes, Surface Nets produces
+//! vertex positions that lie on the actual isosurface, resulting in smoother meshes.
+//!
+//! # Algorithm Overview
+//!
+//! 1. For each voxel that contains a surface crossing (some corners inside, some outside):
+//!    - Find all edges that cross the isosurface
+//!    - Compute the centroid of the crossing points
+//!    - Place a vertex at that centroid
+//!
+//! 2. For each edge that crosses the isosurface:
+//!    - Connect the four adjacent voxel vertices into a quad
+//!
+//! # Seamless Chunk Boundaries
+//!
+//! The implementation extends the vertex grid by one in each positive direction,
+//! using [`NeighborDensityFields`] data to sample beyond chunk boundaries.
+//! This allows quads to be generated that span chunk boundaries.
+
 use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
@@ -9,7 +31,25 @@ use crate::{
     neighbor::{NeighborDensityFields, NeighborFace},
 };
 
-/// World-space size of mesh generated from density field
+/// World-space size of the mesh generated from a density field.
+///
+/// This resource controls the scale of generated meshes. A density field
+/// always has [`DENSITY_FIELD_SIZE`] voxels, but this determines how large
+/// that maps to in world coordinates.
+///
+/// # Default
+/// 10×10×10 world units
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+///
+/// // Make each chunk 20 world units on each side
+/// App::new()
+///     .insert_resource(DensityFieldMeshSize(vec3(20., 20., 20.)));
+/// ```
 #[derive(Resource, Clone, Copy, Deref, DerefMut, Debug)]
 pub struct DensityFieldMeshSize(pub Vec3);
 
@@ -19,7 +59,27 @@ impl Default for DensityFieldMeshSize {
     }
 }
 
-/// Generate mesh on CPU using Surface Nets algorithm
+/// Generates a mesh from a density field using the Surface Nets algorithm.
+///
+/// This function runs entirely on the CPU and produces a Bevy [`Mesh`] with
+/// position and normal attributes.
+///
+/// # Arguments
+/// * `field` - The density field to mesh
+/// * `neighbors` - Cached neighbor data for seamless boundaries (can be empty)
+/// * `mesh_size` - World-space dimensions of the output mesh
+///
+/// # Returns
+/// `Some(Mesh)` if any surface was found, `None` if the field is entirely inside or outside.
+///
+/// # Example
+///
+/// ```ignore
+/// let mesh = generate_mesh_cpu(&field, &neighbors, vec3(10., 10., 10.));
+/// if let Some(mesh) = mesh {
+///     commands.spawn(Mesh3d(meshes.add(mesh)));
+/// }
+/// ```
 pub fn generate_mesh_cpu(
     field: &DensityField,
     neighbors: &NeighborDensityFields,
@@ -52,57 +112,78 @@ pub fn generate_mesh_cpu(
         }
 
         // -X neighbor (x < 0)
-        if x < 0 && y >= 0 && z >= 0 && y < size_y && z < size_z {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegX as usize] {
-                // depth = how far into negative x: x=-1 -> depth=0, x=-2 -> depth=1
-                let depth = (-1 - x) as u32;
-                return slice.get(y as u32, z as u32, depth);
-            }
+        if x < 0
+            && y >= 0
+            && z >= 0
+            && y < size_y
+            && z < size_z
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegX as usize]
+        {
+            let depth = (-1 - x) as u32;
+            return slice.get(y as u32, z as u32, depth);
         }
 
         // +X neighbor (x >= SIZE)
-        if x >= size_x && y >= 0 && z >= 0 && y < size_y && z < size_z {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosX as usize] {
-                // depth = how far past SIZE: x=SIZE -> depth=0, x=SIZE+1 -> depth=1
-                let depth = (x - size_x) as u32;
-                return slice.get(y as u32, z as u32, depth);
-            }
+        if x >= size_x
+            && y >= 0
+            && z >= 0
+            && y < size_y
+            && z < size_z
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosX as usize]
+        {
+            let depth = (x - size_x) as u32;
+            return slice.get(y as u32, z as u32, depth);
         }
 
         // -Y neighbor (y < 0)
-        if y < 0 && x >= 0 && z >= 0 && x < size_x && z < size_z {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegY as usize] {
-                let depth = (-1 - y) as u32;
-                return slice.get(x as u32, z as u32, depth);
-            }
+        if y < 0
+            && x >= 0
+            && z >= 0
+            && x < size_x
+            && z < size_z
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegY as usize]
+        {
+            let depth = (-1 - y) as u32;
+            return slice.get(x as u32, z as u32, depth);
         }
 
         // +Y neighbor (y >= SIZE)
-        if y >= size_y && x >= 0 && z >= 0 && x < size_x && z < size_z {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosY as usize] {
-                let depth = (y - size_y) as u32;
-                return slice.get(x as u32, z as u32, depth);
-            }
+        if y >= size_y
+            && x >= 0
+            && z >= 0
+            && x < size_x
+            && z < size_z
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosY as usize]
+        {
+            let depth = (y - size_y) as u32;
+            return slice.get(x as u32, z as u32, depth);
         }
 
         // -Z neighbor (z < 0)
-        if z < 0 && x >= 0 && y >= 0 && x < size_x && y < size_y {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::NegZ as usize] {
-                let depth = (-1 - z) as u32;
-                return slice.get(x as u32, y as u32, depth);
-            }
+        if z < 0
+            && x >= 0
+            && y >= 0
+            && x < size_x
+            && y < size_y
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegZ as usize]
+        {
+            let depth = (-1 - z) as u32;
+            return slice.get(x as u32, y as u32, depth);
         }
 
         // +Z neighbor (z >= SIZE)
-        if z >= size_z && x >= 0 && y >= 0 && x < size_x && y < size_y {
-            if let Some(ref slice) = neighbors.neighbors[NeighborFace::PosZ as usize] {
-                let depth = (z - size_z) as u32;
-                return slice.get(x as u32, y as u32, depth);
-            }
+        if z >= size_z
+            && x >= 0
+            && y >= 0
+            && x < size_x
+            && y < size_y
+            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosZ as usize]
+        {
+            let depth = (z - size_z) as u32;
+            return slice.get(x as u32, y as u32, depth);
         }
 
         // Edge/corner cases involving multiple neighbors - return outside
-        // These could be handled with additional neighbor data but are less critical
         1.0
     };
 
@@ -151,7 +232,6 @@ pub fn generate_mesh_cpu(
     };
 
     // Pass 1: Generate vertices for each voxel that contains a surface
-    // We iterate over [0, SIZE] inclusive - the extra layer at SIZE uses neighbor data
     for z in 0..=DENSITY_FIELD_SIZE.z {
         for y in 0..=DENSITY_FIELD_SIZE.y {
             for x in 0..=DENSITY_FIELD_SIZE.x {
@@ -236,23 +316,10 @@ pub fn generate_mesh_cpu(
     }
 
     // Pass 2: Generate quads between adjacent voxels that share an edge crossing
-    //
-    // Surface Nets generates one quad per edge that crosses the isosurface.
-    // Each edge is "owned" by one of the four voxels it connects.
-    // We use the convention that the voxel with the MINIMUM coordinates owns the edge.
-    //
-    // With extended vertices [0, SIZE], we can now generate quads at the high boundary
-    // that connect this chunk's mesh to the neighbor's mesh seamlessly.
-    //
-    // We iterate over [1, SIZE] for quad generation:
-    // - Skip 0 because those edges are owned by the -X/-Y/-Z neighbor chunks
-    // - Include SIZE because we have vertices there now (using neighbor data)
-
     let ext_stride_x = 1usize;
     let ext_stride_y = extended_size.x as usize;
     let ext_stride_z = (extended_size.x * extended_size.y) as usize;
 
-    // Iterate over [1, SIZE] inclusive - we need vertices at (x-1), (y-1), (z-1)
     for z in 1..=DENSITY_FIELD_SIZE.z {
         for y in 1..=DENSITY_FIELD_SIZE.y {
             for x in 1..=DENSITY_FIELD_SIZE.x {
@@ -267,13 +334,12 @@ pub fn generate_mesh_cpu(
                 let iy = y as i32;
                 let iz = z as i32;
 
-                // Get SDF values at current position and +1 in each axis
                 let d0 = sample(ix, iy, iz);
                 let dx = sample(ix + 1, iy, iz);
                 let dy = sample(ix, iy + 1, iz);
                 let dz = sample(ix, iy, iz + 1);
 
-                // X-axis edge (between x and x+1): need voxels (x,y,z), (x,y-1,z), (x,y,z-1), (x,y-1,z-1)
+                // X-axis edge
                 if (d0 < 0.0) != (dx < 0.0) {
                     let v1 = vertex_lookup[stride - ext_stride_y];
                     let v2 = vertex_lookup[stride - ext_stride_z];
@@ -288,7 +354,7 @@ pub fn generate_mesh_cpu(
                     }
                 }
 
-                // Y-axis edge (between y and y+1): need voxels (x,y,z), (x-1,y,z), (x,y,z-1), (x-1,y,z-1)
+                // Y-axis edge
                 if (d0 < 0.0) != (dy < 0.0) {
                     let v1 = vertex_lookup[stride - ext_stride_x];
                     let v2 = vertex_lookup[stride - ext_stride_z];
@@ -303,7 +369,7 @@ pub fn generate_mesh_cpu(
                     }
                 }
 
-                // Z-axis edge (between z and z+1): need voxels (x,y,z), (x-1,y,z), (x,y-1,z), (x-1,y-1,z)
+                // Z-axis edge
                 if (d0 < 0.0) != (dz < 0.0) {
                     let v1 = vertex_lookup[stride - ext_stride_x];
                     let v2 = vertex_lookup[stride - ext_stride_y];

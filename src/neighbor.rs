@@ -1,30 +1,68 @@
+//! Neighbor chunk data for seamless mesh boundaries.
+//!
+//! When meshing a chunk, the Surface Nets algorithm needs to sample density values
+//! slightly beyond the chunk boundaries to properly connect vertices at the edges.
+//! This module provides structures to cache and access that neighbor data.
+
 use bevy::prelude::*;
 
 use crate::{DENSITY_FIELD_SIZE, density_field::DensityField};
 
-/// How many planes of neighbor data to store (need 2 for proper boundary vertex computation)
+/// How many planes of neighbor data to store.
+///
+/// We need 2 planes for proper boundary vertex computation in Surface Nets.
 pub const NEIGHBOR_DEPTH: u32 = 2;
 
-/// Cached neighbor field data for seamless meshing
+/// Cached neighbor field data for seamless meshing.
+///
+/// Stores boundary slices from up to 6 neighboring chunks (one per face).
+/// This allows the mesher to sample density values beyond chunk boundaries
+/// without querying the full neighbor fields.
+///
+/// # Example
+///
+/// ```ignore
+/// // The SurfaceNetsPlugin automatically gathers this data, but you can
+/// // also construct it manually:
+/// let mut neighbors = NeighborDensityFields::default();
+/// neighbors.neighbors[NeighborFace::PosX as usize] =
+///     Some(NeighborSlice::from_field(&neighbor_field, NeighborFace::PosX));
+/// ```
 #[derive(Component, Clone, Debug, Default)]
 pub struct NeighborDensityFields {
+    /// Neighbor slices indexed by [`NeighborFace`] (0=NegX, 1=PosX, 2=NegY, etc.)
     pub neighbors: [Option<NeighborSlice>; 6],
 }
 
-/// Stores 2 planes of neighbor density data for seamless boundary meshing
+/// Stores boundary planes of density data from a neighboring chunk.
+///
+/// Contains [`NEIGHBOR_DEPTH`] planes of data (typically 2) to allow proper
+/// gradient computation and vertex positioning at chunk boundaries.
 #[derive(Clone, Debug)]
 pub struct NeighborSlice {
-    /// Flattened 3D data: [depth][b][a] stored as [a + b * size_a + depth * size_a * size_b]
+    /// Flattened 3D data: `[depth][b][a]` stored as `[a + b * size_a + depth * size_a * size_b]`
     pub data: Vec<f32>,
+    /// Size along the first axis (depends on face orientation).
     pub size_a: u32,
+    /// Size along the second axis (depends on face orientation).
     pub size_b: u32,
+    /// Number of planes stored (typically [`NEIGHBOR_DEPTH`]).
     pub depth: u32,
 }
 
 impl NeighborSlice {
-    /// Create slice from neighbor's boundary (2 planes deep)
-    /// For PosX neighbor: we sample their x=0 and x=1 faces
-    /// For NegX neighbor: we sample their x=SIZE-1 and x=SIZE-2 faces
+    /// Creates a slice from a neighbor chunk's boundary planes.
+    ///
+    /// Extracts [`NEIGHBOR_DEPTH`] planes of data from the appropriate face of the neighbor.
+    ///
+    /// # Arguments
+    /// * `field` - The neighbor's density field
+    /// * `face` - Which face of the neighbor to sample (from the current chunk's perspective)
+    ///
+    /// # Face Mapping
+    /// - `PosX` neighbor: samples their x=0 and x=1 faces (corresponds to our x=SIZE and x=SIZE+1)
+    /// - `NegX` neighbor: samples their x=SIZE-1 and x=SIZE-2 faces (corresponds to our x=-1 and x=-2)
+    /// - Similar logic for Y and Z axes
     pub fn from_field(field: &DensityField, face: NeighborFace) -> Self {
         let (size_a, size_b, sampler): (u32, u32, Box<dyn Fn(u32, u32, u32) -> f32>) = match face {
             // When we need data from -X neighbor, get their x=SIZE-1 and x=SIZE-2 planes
@@ -95,9 +133,15 @@ impl NeighborSlice {
         }
     }
 
-    /// Get value at (a, b) coordinates with depth offset
-    /// depth=0 is the plane closest to the boundary
-    /// depth=1 is one step further into the neighbor
+    /// Gets the density value at (a, b) coordinates with depth offset.
+    ///
+    /// # Arguments
+    /// * `a` - First axis coordinate
+    /// * `b` - Second axis coordinate  
+    /// * `depth` - Depth into the neighbor (0 = closest plane, 1 = one step further)
+    ///
+    /// # Returns
+    /// The density value, or `1.0` (exterior) if out of bounds.
     #[inline]
     pub fn get(&self, a: u32, b: u32, depth: u32) -> f32 {
         if a < self.size_a && b < self.size_b && depth < self.depth {
@@ -108,24 +152,34 @@ impl NeighborSlice {
         }
     }
 
-    /// Convenience method for backward compatibility - gets depth=0
+    /// Gets the density value at the boundary plane (depth=0).
+    ///
+    /// Convenience method equivalent to `get(a, b, 0)`.
     #[inline]
     pub fn get_boundary(&self, a: u32, b: u32) -> f32 {
         self.get(a, b, 0)
     }
 }
 
+/// Identifies a face of a chunk for neighbor lookups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NeighborFace {
+    /// Negative X direction (-1, 0, 0)
     NegX = 0,
+    /// Positive X direction (+1, 0, 0)
     PosX = 1,
+    /// Negative Y direction (0, -1, 0)
     NegY = 2,
+    /// Positive Y direction (0, +1, 0)
     PosY = 3,
+    /// Negative Z direction (0, 0, -1)
     NegZ = 4,
+    /// Positive Z direction (0, 0, +1)
     PosZ = 5,
 }
 
 impl NeighborFace {
+    /// All six faces in order matching the enum discriminants.
     pub const ALL: [Self; 6] = [
         Self::NegX,
         Self::PosX,
@@ -135,6 +189,7 @@ impl NeighborFace {
         Self::PosZ,
     ];
 
+    /// Returns the chunk coordinate offset for this face direction.
     pub fn offset(&self) -> IVec3 {
         match self {
             Self::NegX => ivec3(-1, 0, 0),

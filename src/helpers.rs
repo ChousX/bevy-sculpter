@@ -1,8 +1,45 @@
-use crate::{
-    DENSITY_FIELD_SIZE, FIELD_VOLUME, density_field::DensityField, mesher::DensityFieldMeshSize,
-};
+//! Sculpting brush functions for modifying density fields.
+//!
+//! This module provides various brush types for interactive sculpting:
+//!
+//! - [`brush_sphere`] - Hard CSG add/subtract operations (instant)
+//! - [`brush_smooth`] / [`brush_smooth_timed`] - Continuous smooth sculpting
+//! - [`brush_blur`] - Surface smoothing
+//! - [`brush_flatten`] - Terrain flattening toward a target height
+//!
+//! # Coordinate System
+//!
+//! All brush functions operate in **grid coordinates** (0-32 for the default field size).
+//! Convert from world coordinates using the mesh size:
+//!
+//! ```ignore
+//! let scale = Vec3::splat(32.0) / mesh_size;
+//! let grid_center = world_center * scale;
+//! let grid_radius = world_radius * scale.x;
+//! ```
+
+use crate::{DENSITY_FIELD_SIZE, density_field::DensityField};
 use bevy::prelude::*;
 
+/// Fills the density field with a sphere SDF.
+///
+/// Sets each voxel to the signed distance from the sphere surface.
+///
+/// # Arguments
+/// * `density_field` - The field to modify
+/// * `center` - Sphere center in grid coordinates
+/// * `radius` - Sphere radius in grid units
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+/// use bevy_sculpter::helpers::fill_sphere;
+///
+/// let mut field = DensityField::new();
+/// fill_sphere(&mut field, vec3(16.0, 16.0, 16.0), 10.0);
+/// ```
 pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) {
     for z in 0..DENSITY_FIELD_SIZE.z {
         for y in 0..DENSITY_FIELD_SIZE.y {
@@ -14,11 +51,44 @@ pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) 
     }
 }
 
+/// Fills the density field with a centered sphere SDF.
+///
+/// Convenience wrapper for [`fill_sphere`] that places the sphere at the field center.
+///
+/// # Arguments
+/// * `density_field` - The field to modify
+/// * `radius` - Sphere radius in grid units
 pub fn fill_centered_sphere(density_field: &mut DensityField, radius: f32) {
     let center = DENSITY_FIELD_SIZE.as_vec3() / 2.0;
     fill_sphere(density_field, center, radius);
 }
 
+/// Applies a hard CSG sphere brush (instant add or subtract).
+///
+/// Uses min/max CSG operations for immediate, sharp-edged modifications.
+/// For smoother, continuous sculpting, use [`brush_smooth`] instead.
+///
+/// # Arguments
+/// * `density_field` - The field to modify
+/// * `center` - Brush center in grid coordinates
+/// * `radius` - Brush radius in grid units
+/// * `add` - If `true`, adds material (CSG union); if `false`, removes (CSG subtract)
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+/// use bevy_sculpter::helpers::brush_sphere;
+///
+/// let mut field = DensityField::new();
+///
+/// // Add a sphere
+/// brush_sphere(&mut field, vec3(16.0, 16.0, 16.0), 8.0, true);
+///
+/// // Carve out a smaller sphere
+/// brush_sphere(&mut field, vec3(20.0, 16.0, 16.0), 4.0, false);
+/// ```
 pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32, add: bool) {
     let min = (center - Vec3::splat(radius + 1.0))
         .max(Vec3::ZERO)
@@ -45,9 +115,9 @@ pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32,
     }
 }
 
-/// Smooth brush that gradually adjusts density values over time.
+/// Applies a smooth brush that gradually adjusts density values.
 ///
-/// Unlike `brush_sphere` which uses CSG min/max operations, this brush
+/// Unlike [`brush_sphere`] which uses CSG min/max operations, this brush
 /// additively changes density values, allowing for continuous strokes
 /// that accumulate effect over time.
 ///
@@ -57,6 +127,19 @@ pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32,
 /// * `radius` - Brush radius in grid units
 /// * `strength` - How much to change density per application (positive = remove, negative = add)
 /// * `falloff` - Falloff curve power (1.0 = linear, 2.0 = quadratic, etc.)
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+/// use bevy_sculpter::helpers::brush_smooth;
+///
+/// let mut field = DensityField::new();
+///
+/// // Gently add material with quadratic falloff
+/// brush_smooth(&mut field, vec3(16.0, 16.0, 16.0), 5.0, -0.5, 2.0);
+/// ```
 pub fn brush_smooth(
     density_field: &mut DensityField,
     center: Vec3,
@@ -95,18 +178,33 @@ pub fn brush_smooth(
     }
 }
 
-/// Smooth brush with time-based strength for continuous strokes.
+/// Applies a smooth brush with time-based strength for continuous strokes.
 ///
-/// Wrapper around `brush_smooth` that scales strength by delta time,
-/// making the effect frame-rate independent.
+/// Wrapper around [`brush_smooth`] that scales strength by delta time,
+/// making the effect frame-rate independent. Use this in update systems
+/// for held mouse button sculpting.
 ///
 /// # Arguments
 /// * `density_field` - The field to modify
-/// * `center` - Brush center in grid coordinates  
+/// * `center` - Brush center in grid coordinates
 /// * `radius` - Brush radius in grid units
 /// * `rate` - Density change per second (positive = remove material, negative = add)
 /// * `delta_time` - Time since last frame in seconds
 /// * `falloff` - Falloff curve power (1.0 = linear, 2.0 = quadratic)
+///
+/// # Example
+///
+/// ```ignore
+/// fn sculpt_system(
+///     time: Res<Time>,
+///     mut fields: Query<&mut DensityField>,
+/// ) {
+///     for mut field in fields.iter_mut() {
+///         // Add material at 5 units/second
+///         brush_smooth_timed(&mut field, center, 3.0, -5.0, time.delta_secs(), 2.0);
+///     }
+/// }
+/// ```
 pub fn brush_smooth_timed(
     density_field: &mut DensityField,
     center: Vec3,
@@ -118,7 +216,7 @@ pub fn brush_smooth_timed(
     brush_smooth(density_field, center, radius, rate * delta_time, falloff);
 }
 
-/// Flatten brush - pushes density values toward a target height plane.
+/// Applies a flatten brush that pushes density values toward a target height plane.
 ///
 /// Useful for creating flat surfaces or leveling terrain.
 ///
@@ -129,6 +227,19 @@ pub fn brush_smooth_timed(
 /// * `target_height` - The Y coordinate to flatten toward
 /// * `strength` - How strongly to push toward target (0.0-1.0 typical)
 /// * `falloff` - Falloff curve power
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+/// use bevy_sculpter::helpers::brush_flatten;
+///
+/// let mut field = DensityField::new();
+///
+/// // Flatten terrain around a point to y=16
+/// brush_flatten(&mut field, vec3(16.0, 16.0, 16.0), 8.0, 16.0, 0.5, 2.0);
+/// ```
 pub fn brush_flatten(
     density_field: &mut DensityField,
     center: Vec3,
@@ -168,9 +279,10 @@ pub fn brush_flatten(
     }
 }
 
-/// Smooth/blur brush - averages density values with neighbors.
+/// Applies a blur/smooth brush that averages density values with neighbors.
 ///
 /// Useful for smoothing out rough surfaces or blending brush strokes.
+/// Uses a two-pass approach to avoid read-modify-write issues.
 ///
 /// # Arguments
 /// * `density_field` - The field to modify
@@ -178,6 +290,19 @@ pub fn brush_flatten(
 /// * `radius` - Brush radius in grid units
 /// * `strength` - Blend factor toward average (0.0-1.0)
 /// * `falloff` - Falloff curve power
+///
+/// # Example
+///
+/// ```
+/// use bevy::prelude::*;
+/// use bevy_sculpter::prelude::*;
+/// use bevy_sculpter::helpers::brush_blur;
+///
+/// let mut field = DensityField::new();
+///
+/// // Smooth the surface around a point
+/// brush_blur(&mut field, vec3(16.0, 16.0, 16.0), 5.0, 0.5, 2.0);
+/// ```
 pub fn brush_blur(
     density_field: &mut DensityField,
     center: Vec3,
