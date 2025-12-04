@@ -1,4 +1,6 @@
-use crate::{DENSITY_FIELD_SIZE, prelude::DensityField};
+use crate::{
+    DENSITY_FIELD_SIZE, FIELD_VOLUME, density_field::DensityField, mesher::DensityFieldMeshSize,
+};
 use bevy::prelude::*;
 
 pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) {
