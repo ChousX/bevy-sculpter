@@ -2,10 +2,10 @@
 //!
 //! This module provides various brush types for interactive sculpting:
 //!
-//! - Hard CSG add/subtract operations via [`brush_sphere`]
-//! - Continuous smooth sculpting via [`brush_smooth`] and [`brush_smooth_timed`]
-//! - Surface smoothing via [`brush_blur`]
-//! - Terrain flattening via [`brush_flatten`]
+//! - Hard CSG add/subtract operations via [`brush_sphere`](crate::helpers::brush_sphere)
+//! - Continuous smooth sculpting via [`brush_smooth`](crate::helpers::brush_smooth) and [`brush_smooth_timed`](crate::helpers::brush_smooth_timed)
+//! - Surface smoothing via [`brush_blur`](crate::helpers::brush_blur)
+//! - Terrain flattening via [`brush_flatten`](crate::helpers::brush_flatten)
 //!
 //! # Coordinate System
 //!

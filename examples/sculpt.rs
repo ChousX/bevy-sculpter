@@ -42,7 +42,7 @@ fn show_chunks(mut show_chunks: ResMut<NextState<ChunkBoundryVisualizer>>) {
 enum BrushMode {
     #[default]
     Smooth,
-    Hard,
+    _Hard,
     Blur,
 }
 
@@ -175,7 +175,7 @@ fn fly_camera(
         brush.mode = match brush.mode {
             BrushMode::Smooth => BrushMode::Blur,
             BrushMode::Blur => BrushMode::Smooth,
-            BrushMode::Hard => BrushMode::Smooth,
+            BrushMode::_Hard => BrushMode::Smooth,
         };
     }
 
@@ -329,7 +329,7 @@ fn sculpt_terrain(
                         brush.falloff,
                     );
                 }
-                BrushMode::Hard => {
+                BrushMode::_Hard => {
                     bevy_sculpter::helpers::brush_sphere(
                         &mut field,
                         grid_center,
@@ -423,7 +423,7 @@ fn update_brush_preview(
             mat.base_color = match brush.mode {
                 BrushMode::Smooth => Color::srgba(0.2, 0.8, 0.2, 0.3),
                 BrushMode::Blur => Color::srgba(0.2, 0.2, 0.8, 0.3),
-                BrushMode::Hard => Color::srgba(0.8, 0.2, 0.2, 0.3),
+                BrushMode::_Hard => Color::srgba(0.8, 0.2, 0.2, 0.3),
             };
         }
     } else {
@@ -439,7 +439,7 @@ fn ui_text(brush: Res<SculptBrush>, mut text_q: Query<&mut Text, With<UiText>>) 
     let mode_str = match brush.mode {
         BrushMode::Smooth => "Smooth (continuous)",
         BrushMode::Blur => "Blur/Smooth surface",
-        BrushMode::Hard => "Hard (CSG)",
+        BrushMode::_Hard => "Hard (CSG)",
     };
 
     *text = Text::new(format!(
