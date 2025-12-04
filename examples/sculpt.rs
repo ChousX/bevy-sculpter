@@ -1,9 +1,16 @@
-//! Interactive 3D sculpting example.
+//! Interactive 3D sculpting example with smooth brushes.
+//!
+//! Controls:
 //! - Left click + drag: Rotate camera
-//! - Right click: Add material (sculpt in)
-//! - Middle click: Remove material (carve out)
+//! - Right click (hold): Smooth add material
+//! - Middle click (hold): Smooth remove material  
+//! - Shift + Right click: Hard add (CSG union)
+//! - Shift + Middle click: Hard remove (CSG subtract)
+//! - B: Toggle blur/smooth brush
 //! - Scroll wheel: Adjust brush size
+//! - [ / ]: Adjust brush strength
 //! - WASD/Space/Shift: Move camera
+//! - Ctrl: Speed boost
 
 use bevy::{
     input::mouse::{MouseMotion, MouseWheel},
@@ -32,11 +39,24 @@ fn show_chunks(mut show_chunks: ResMut<NextState<ChunkBoundryVisualizer>>) {
     show_chunks.set(ChunkBoundryVisualizer::On);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum BrushMode {
+    #[default]
+    Smooth,
+    Hard,
+    Blur,
+}
+
 #[derive(Resource)]
 struct SculptBrush {
     radius: f32,
     min_radius: f32,
     max_radius: f32,
+    strength: f32,
+    min_strength: f32,
+    max_strength: f32,
+    falloff: f32,
+    mode: BrushMode,
 }
 
 impl Default for SculptBrush {
@@ -45,6 +65,11 @@ impl Default for SculptBrush {
             radius: 2.0,
             min_radius: 0.5,
             max_radius: 8.0,
+            strength: 5.0, // Units per second for smooth brush
+            min_strength: 0.5,
+            max_strength: 20.0,
+            falloff: 2.0, // Quadratic falloff
+            mode: BrushMode::Smooth,
         }
     }
 }
@@ -79,7 +104,6 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Spawn a 3x3x3 grid of chunks with density fields
     for x in -1..=1 {
         for y in -1..=1 {
             for z in -1..=1 {
@@ -107,14 +131,12 @@ fn setup(
         BrushPreview,
     ));
 
-    // Camera
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(30.0, 30.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
         FlyCam::default(),
     ));
 
-    // Light
     commands.spawn((
         DirectionalLight {
             illuminance: 10000.0,
@@ -124,7 +146,6 @@ fn setup(
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // UI text
     commands.spawn((
         Text::new(""),
         Node {
@@ -150,7 +171,23 @@ fn fly_camera(
         return;
     };
 
-    // Mouse look when left mouse held
+    // Toggle brush mode with B
+    if keyboard.just_pressed(KeyCode::KeyB) {
+        brush.mode = match brush.mode {
+            BrushMode::Smooth => BrushMode::Blur,
+            BrushMode::Blur => BrushMode::Smooth,
+            BrushMode::Hard => BrushMode::Smooth,
+        };
+    }
+
+    // Adjust strength with [ and ]
+    if keyboard.just_pressed(KeyCode::BracketLeft) {
+        brush.strength = (brush.strength - 1.0).max(brush.min_strength);
+    }
+    if keyboard.just_pressed(KeyCode::BracketRight) {
+        brush.strength = (brush.strength + 1.0).min(brush.max_strength);
+    }
+
     if mouse_buttons.pressed(MouseButton::Left) {
         for motion in mouse_motion.read() {
             fly_cam.yaw -= motion.delta.x * fly_cam.sensitivity;
@@ -162,12 +199,10 @@ fn fly_camera(
         mouse_motion.clear();
     }
 
-    // Scroll to adjust brush size
     for ev in scroll.read() {
         brush.radius = (brush.radius + ev.y * 0.2).clamp(brush.min_radius, brush.max_radius);
     }
 
-    // Keyboard movement
     let mut velocity = Vec3::ZERO;
     let forward = transform.forward();
     let right = transform.right();
@@ -204,6 +239,8 @@ fn fly_camera(
 }
 
 fn sculpt_terrain(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<FlyCam>>,
@@ -233,25 +270,24 @@ fn sculpt_terrain(
         return;
     };
 
-    // Find hit point by raycasting against all chunks
     let Some(hit_point) = raycast_terrain(&chunks, &mesh_size, ray) else {
         return;
     };
 
-    // Apply brush to all affected chunks
     let world_brush_radius = brush.radius;
     let chunk_world_size = mesh_size.0;
+    let use_hard_brush =
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
 
     for (chunk_pos, mut field) in chunks.iter_mut() {
         let chunk_world_origin = chunk_pos.0.as_vec3() * chunk_world_size;
         let local_hit = hit_point - chunk_world_origin;
 
-        // Scale to grid coordinates
         let scale = Vec3::new(32.0, 32.0, 32.0) / chunk_world_size;
         let grid_center = local_hit * scale;
         let grid_radius = world_brush_radius * scale.x;
 
-        // Check if brush affects this chunk
+        // AABB check
         let chunk_min = Vec3::ZERO;
         let chunk_max = Vec3::splat(32.0);
         let brush_min = grid_center - Vec3::splat(grid_radius);
@@ -267,10 +303,51 @@ fn sculpt_terrain(
             continue;
         }
 
-        bevy_sculpter::helpers::brush_sphere(&mut field, grid_center, grid_radius, adding);
+        if use_hard_brush {
+            // Hard CSG brush (instant)
+            bevy_sculpter::helpers::brush_sphere(&mut field, grid_center, grid_radius, adding);
+        } else {
+            match brush.mode {
+                BrushMode::Smooth => {
+                    // Smooth brush: rate is strength per second
+                    // Negative rate = add material (decrease SDF)
+                    // Positive rate = remove material (increase SDF)
+                    let rate = if adding {
+                        -brush.strength
+                    } else {
+                        brush.strength
+                    };
+                    bevy_sculpter::helpers::brush_smooth_timed(
+                        &mut field,
+                        grid_center,
+                        grid_radius,
+                        rate,
+                        time.delta_secs(),
+                        brush.falloff,
+                    );
+                }
+                BrushMode::Blur => {
+                    // Blur/smooth brush
+                    bevy_sculpter::helpers::brush_blur(
+                        &mut field,
+                        grid_center,
+                        grid_radius,
+                        brush.strength * 0.1 * time.delta_secs(),
+                        brush.falloff,
+                    );
+                }
+                BrushMode::Hard => {
+                    bevy_sculpter::helpers::brush_sphere(
+                        &mut field,
+                        grid_center,
+                        grid_radius,
+                        adding,
+                    );
+                }
+            }
+        }
     }
 
-    // Mark all chunks dirty
     for entity in chunk_entities.iter() {
         commands.entity(entity).insert(DensityFieldDirty);
     }
@@ -288,8 +365,6 @@ fn raycast_terrain(
 
     while t < max_dist {
         let point = ray.origin + ray.direction * t;
-
-        // Determine which chunk this point is in
         let chunk_coord = (point / chunk_world_size).floor().as_ivec3();
 
         for (chunk_pos, field) in chunks.iter() {
@@ -326,9 +401,10 @@ fn update_brush_preview(
     chunks: Query<(&ChunkPos, &mut DensityField)>,
     mesh_size: Res<DensityFieldMeshSize>,
     brush: Res<SculptBrush>,
-    mut preview_q: Query<&mut Transform, With<BrushPreview>>,
+    mut preview_q: Query<(&mut Transform, &MeshMaterial3d<StandardMaterial>), With<BrushPreview>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Ok(mut preview_transform) = preview_q.single_mut() else {
+    let Ok((mut preview_transform, mat_handle)) = preview_q.single_mut() else {
         return;
     };
     let Ok(window) = window_q.single() else {
@@ -348,6 +424,15 @@ fn update_brush_preview(
     if let Some(hit) = raycast_terrain(&chunks, &mesh_size, ray) {
         preview_transform.translation = hit;
         preview_transform.scale = Vec3::splat(brush.radius);
+
+        // Change color based on mode
+        if let Some(mat) = materials.get_mut(&mat_handle.0) {
+            mat.base_color = match brush.mode {
+                BrushMode::Smooth => Color::srgba(0.2, 0.8, 0.2, 0.3),
+                BrushMode::Blur => Color::srgba(0.2, 0.2, 0.8, 0.3),
+                BrushMode::Hard => Color::srgba(0.8, 0.2, 0.2, 0.3),
+            };
+        }
     } else {
         preview_transform.scale = Vec3::ZERO;
     }
@@ -357,14 +442,26 @@ fn ui_text(brush: Res<SculptBrush>, mut text_q: Query<&mut Text, With<UiText>>) 
     let Ok(mut text) = text_q.single_mut() else {
         return;
     };
+
+    let mode_str = match brush.mode {
+        BrushMode::Smooth => "Smooth (continuous)",
+        BrushMode::Blur => "Blur/Smooth surface",
+        BrushMode::Hard => "Hard (CSG)",
+    };
+
     *text = Text::new(format!(
         "Sculpt Controls:\n\
          Left Click + Drag: Rotate camera\n\
-         Right Click: Add material\n\
-         Middle Click: Remove material\n\
+         Right Click (hold): Add material\n\
+         Middle Click (hold): Remove material\n\
+         Shift + Click: Hard brush (instant CSG)\n\
+         \n\
+         B: Toggle brush mode\n\
          Scroll: Brush size ({:.1})\n\
-         WASD/Space/Shift: Move\n\
-         Ctrl: Speed boost",
-        brush.radius
+         [ / ]: Brush strength ({:.1})\n\
+         \n\
+         Mode: {}\n\
+         WASD/Space/Shift: Move | Ctrl: Speed",
+        brush.radius, brush.strength, mode_str
     ));
 }
