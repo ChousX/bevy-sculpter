@@ -3,7 +3,7 @@
 [![Docs.rs](https://docs.rs/bevy-sculpter/badge.svg)](https://docs.rs/bevy-sculpter)
 [![License](https://img.shields.io/crates/l/bevy-sculpter.svg)](https://github.com/YOUR_USERNAME/bevy-sculpter#license)
 
-![Screenshot](https://raw.githubusercontent.com/ChousX/bevy-sculpter/main/screenshots/screenshot0.png)
+![Screenshot](https://raw.githubusercontent.com/ChousX/bevy-sculpter/again/screenshots/screenshot0.png)
 
 SDF-based voxel sculpting and Surface Nets meshing for Bevy.
 
