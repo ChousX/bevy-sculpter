@@ -1,6 +1,6 @@
 [package]
 name = "bevy-sculpter"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "SDF-based voxel sculpting and Surface Nets meshing for Bevy"
@@ -12,7 +12,7 @@ categories = ["game-development", "rendering::data-formats"]
 [dependencies]
 bevy = { version = "0.17", features = ["wayland"] }
 bytemuck = "1.24.0"
-chunky-bevy = "0.1"
+chunky-bevy = "0.2"
 
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
