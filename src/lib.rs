@@ -41,6 +41,7 @@
 //! - **[`DensityField`]**: SDF-based volumetric storage with raycasting and nearest-point queries
 //! - **[`SurfaceNetsPlugin`]**: Automatic mesh generation with seamless chunk boundaries
 //! - **[`helpers`]**: Sculpting brushes (smooth, hard, blur, flatten)
+//! - **[`neighbor`]**: Generic neighbor data structures for seamless chunk boundaries
 //!
 //! ## Stability
 //!
@@ -74,10 +75,15 @@ pub mod neighbor;
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
     pub use crate::{
-        DENSITY_FIELD_SIZE, SurfaceNetsPlugin,
+        DENSITY_FIELD_SIZE,
+        SurfaceNetsPlugin,
         density_field::{DensityField, DensityFieldDirty},
         mesher::DensityFieldMeshSize,
-        neighbor::NeighborDensityFields,
+        // Export generic neighbor types for reuse
+        neighbor::{
+            DensitySlice, NEIGHBOR_DEPTH, NeighborDensityFields, NeighborFace, NeighborFields,
+            NeighborSlice,
+        },
     };
 }
 
@@ -152,7 +158,7 @@ fn gather_neighbor_fields(
                 && let Ok(neighbor_field) = all_fields.get(neighbor_entity)
             {
                 neighbors.neighbors[face as usize] =
-                    Some(NeighborSlice::from_field(neighbor_field, face));
+                    Some(NeighborSlice::from_density_field(neighbor_field, face));
             }
         }
 
