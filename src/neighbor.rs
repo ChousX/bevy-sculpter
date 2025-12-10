@@ -213,11 +213,10 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
     /// neighbor data exists, `None` otherwise.
     pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<T> {
         for face in NeighborFace::ALL {
-            if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size) {
-                if let Some(ref slice) = self.neighbors[face as usize] {
+            if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size)
+                && let Some(ref slice) = self.neighbors[face as usize] {
                     return Some(slice.get(a, b, depth));
                 }
-            }
         }
         None
     }
