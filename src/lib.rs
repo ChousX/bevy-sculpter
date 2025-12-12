@@ -55,6 +55,7 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
+use chunky_bevy::ChunkyPlugin;
 pub use chunky_bevy::prelude::{ChunkManager, ChunkPos};
 
 use crate::{
@@ -119,15 +120,17 @@ pub struct SurfaceNetsPlugin;
 
 impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DensityFieldMeshSize>().add_systems(
-            Update,
-            (
-                auto_mark_dirty,
-                gather_neighbor_fields,
-                process_dirty_chunks,
-            )
-                .chain(),
-        );
+        app.add_plugins(ChunkyPlugin::default())
+            .init_resource::<DensityFieldMeshSize>()
+            .add_systems(
+                Update,
+                (
+                    auto_mark_dirty,
+                    gather_neighbor_fields,
+                    process_dirty_chunks,
+                )
+                    .chain(),
+            );
     }
 }
 

@@ -22,7 +22,6 @@ use chunky_bevy::prelude::*;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(ChunkyPlugin::default())
         .add_plugins(SurfaceNetsPlugin)
         .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
         .init_resource::<SculptBrush>()
