@@ -184,7 +184,10 @@ pub fn generate_mesh_cpu(
         }
 
         // Edge/corner cases involving multiple neighbors - return outside
-        1.0
+        let clamped_x = x.clamp(0, size_x - 1) as u32;
+        let clamped_y = y.clamp(0, size_y - 1) as u32;
+        let clamped_z = z.clamp(0, size_z - 1) as u32;
+        field.get(clamped_x, clamped_y, clamped_z)
     };
 
     // Cube corners (offsets from voxel origin)

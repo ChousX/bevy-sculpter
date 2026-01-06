@@ -153,28 +153,19 @@ fn gather_neighbor_fields(
 ) {
     for (entity, chunk_pos) in dirty_chunks.iter() {
         let mut neighbors = NeighborDensityFields::default();
-        let mut all_neighbors_present = true;
 
         for face in NeighborFace::ALL {
             let neighbor_pos = chunk_pos.0 + face.offset();
 
-            if let Some(neighbor_entity) = chunk_manager.get_chunk(&neighbor_pos) {
-                if let Ok(neighbor_field) = all_fields.get(neighbor_entity) {
-                    neighbors.neighbors[face as usize] =
-                        Some(NeighborSlice::from_density_field(neighbor_field, face));
-                } else {
-                    all_neighbors_present = false;
-                }
-            } else {
-                all_neighbors_present = false;
+            if let Some(neighbor_entity) = chunk_manager.get_chunk(&neighbor_pos)
+                && let Ok(neighbor_field) = all_fields.get(neighbor_entity)
+            {
+                neighbors.neighbors[face as usize] =
+                    Some(NeighborSlice::from_density_field(neighbor_field, face));
             }
         }
 
         commands.entity(entity).insert(neighbors);
-
-        if !all_neighbors_present {
-            commands.entity(entity).remove::<DensityFieldDirty>();
-        }
     }
 }
 
