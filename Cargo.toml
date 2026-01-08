@@ -22,7 +22,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
 
 [features]
 # Default to a native dev build.
-# default = ["dev_native"]
+default = []
 
 dev = [
     # Improve compile times for dev builds by linking Bevy as a dynamic library.
@@ -39,6 +39,7 @@ dev_native = [
     # Enable embedded asset hot reloading for native dev builds.
     "bevy/embedded_watcher",
 ]
+auto-mesh = []
 [package.metadata.bevy_cli.release]
 # Disable dev features for release builds.
 default-features = false

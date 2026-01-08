@@ -17,7 +17,7 @@
 //!     App::new()
 //!         .add_plugins(DefaultPlugins)
 //!         .add_plugins(ChunkyPlugin::default())
-//!         .add_plugins(SurfaceNetsPlugin)
+//!         .add_plugins(SurfaceNetsPlugin::default())
 //!         .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
 //!         .add_systems(Startup, setup)
 //!         .run();
@@ -31,7 +31,7 @@
 //!         Chunk,
 //!         ChunkPos(ivec3(0, 0, 0)),
 //!         field,
-//!         DensityFieldDirty,
+//!         GenerateMesh,
 //!     ));
 //! }
 //! ```
@@ -61,7 +61,7 @@ pub use chunky_bevy::prelude::{ChunkManager, ChunkPos};
 use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
-    prelude::{DensityField, DensityFieldDirty, NeighborDensityFields},
+    prelude::{DensityField, GenerateMesh, NeighborDensityFields},
 };
 
 /// Density field storage and SDF operations.
@@ -78,7 +78,7 @@ pub mod prelude {
     pub use crate::{
         DENSITY_FIELD_SIZE,
         SurfaceNetsPlugin,
-        density_field::{DensityField, DensityFieldDirty},
+        density_field::{DensityField, GenerateMesh},
         mesher::DensityFieldMeshSize,
         // Export generic neighbor types for reuse
         neighbor::{
@@ -101,7 +101,16 @@ pub const NULL_VERTEX: u32 = u32::MAX;
 /// Plugin that enables automatic Surface Nets mesh generation for chunks with density fields.
 ///
 /// When added to your app, this plugin will automatically generate and update meshes for any
-/// entity that has both a [`DensityField`] and [`DensityFieldDirty`] components.
+/// entity that has both a [`DensityField`] and [`GenerateMesh`] components.
+///
+/// # Auto-marking
+///
+/// By default (with the `auto-mesh` feature enabled), chunks are automatically marked for
+/// meshing when their [`DensityField`] changes. Disable this feature for manual control:
+///
+/// ```toml
+/// bevy-sculpter = { version = "...", default-features = false }
+/// ```
 ///
 /// # Example
 ///
@@ -121,37 +130,44 @@ pub struct SurfaceNetsPlugin;
 impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ChunkyPlugin::default())
-            .init_resource::<DensityFieldMeshSize>()
-            .add_systems(
-                Update,
-                (
-                    auto_mark_dirty,
-                    gather_neighbor_fields,
-                    process_dirty_chunks,
-                )
-                    .chain(),
-            );
+            .init_resource::<DensityFieldMeshSize>();
+
+        #[cfg(feature = "auto-mesh")]
+        app.add_systems(Update, auto_mark_generate);
+
+        app.add_systems(Update, (gather_neighbor_fields, process_chunks).chain());
     }
 }
 
-/// Auto-mark chunks dirty when their density field changes
-fn auto_mark_dirty(
+/// Auto-mark chunks for mesh generation when their density field changes
+#[cfg(feature = "auto-mesh")]
+fn auto_mark_generate(
     mut commands: Commands,
-    changed: Query<Entity, (Changed<DensityField>, Without<DensityFieldDirty>)>,
+    changed: Query<Entity, (Changed<DensityField>, Without<GenerateMesh>)>,
 ) {
     for entity in changed.iter() {
-        commands.entity(entity).insert(DensityFieldDirty);
+        commands.entity(entity).insert(GenerateMesh);
     }
 }
 
-/// Gather neighbor density slices for dirty chunks
+/// Auto-mark chunks for mesh generation when their density field changes
+fn auto_mark_generate(
+    mut commands: Commands,
+    changed: Query<Entity, (Changed<DensityField>, Without<GenerateMesh>)>,
+) {
+    for entity in changed.iter() {
+        commands.entity(entity).insert(GenerateMesh);
+    }
+}
+
+/// Gather neighbor density slices for chunks pending mesh generation
 fn gather_neighbor_fields(
     mut commands: Commands,
-    dirty_chunks: Query<(Entity, &ChunkPos), (With<DensityFieldDirty>, With<DensityField>)>,
+    pending_chunks: Query<(Entity, &ChunkPos), (With<GenerateMesh>, With<DensityField>)>,
     all_fields: Query<&DensityField>,
     chunk_manager: Res<ChunkManager>,
 ) {
-    for (entity, chunk_pos) in dirty_chunks.iter() {
+    for (entity, chunk_pos) in pending_chunks.iter() {
         let mut neighbors = NeighborDensityFields::default();
 
         for face in NeighborFace::ALL {
@@ -169,19 +185,19 @@ fn gather_neighbor_fields(
     }
 }
 
-/// Process dirty chunks and generate meshes
-fn process_dirty_chunks(
+/// Process chunks pending mesh generation
+fn process_chunks(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    dirty_chunks: Query<
+    pending_chunks: Query<
         (Entity, &DensityField, Option<&NeighborDensityFields>),
-        With<DensityFieldDirty>,
+        With<GenerateMesh>,
     >,
     mesh_size: Res<DensityFieldMeshSize>,
     existing_meshes: Query<&Mesh3d>,
 ) {
-    for (entity, field, neighbors) in dirty_chunks.iter() {
+    for (entity, field, neighbors) in pending_chunks.iter() {
         let neighbors = neighbors.cloned().unwrap_or_default();
 
         if let Some(mesh) = mesher::generate_mesh_cpu(field, &neighbors, mesh_size.0) {
@@ -201,6 +217,6 @@ fn process_dirty_chunks(
             }
         }
 
-        commands.entity(entity).remove::<DensityFieldDirty>();
+        commands.entity(entity).remove::<GenerateMesh>();
     }
 }

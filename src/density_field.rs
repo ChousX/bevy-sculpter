@@ -846,4 +846,4 @@ impl DensityField {
 /// mesh regeneration. The [`SurfaceNetsPlugin`](crate::SurfaceNetsPlugin)
 /// will automatically remove it after processing.
 #[derive(Component, Clone, Copy, Default, Debug)]
-pub struct DensityFieldDirty;
+pub struct GenerateMesh;

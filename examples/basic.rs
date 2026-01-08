@@ -47,7 +47,7 @@ fn setup(mut commands: Commands) {
                 let local_sphere_center = sphere_center - global_offset + local_center;
 
                 bevy_sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
-                commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, DensityFieldDirty));
+                commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, GenerateMesh));
             }
         }
     }
