@@ -66,6 +66,7 @@ use crate::{
 
 /// Density field storage and SDF operations.
 pub mod density_field;
+pub mod field;
 /// Sculpting brush functions for modifying density fields.
 pub mod helpers;
 /// Surface Nets mesh generation.
@@ -79,6 +80,7 @@ pub mod prelude {
         DENSITY_FIELD_SIZE,
         SurfaceNetsPlugin,
         density_field::{DensityField, GenerateMesh},
+        field::Field,
         mesher::DensityFieldMeshSize,
         // Export generic neighbor types for reuse
         neighbor::{
@@ -168,18 +170,13 @@ fn gather_neighbor_fields(
     chunk_manager: Res<ChunkManager>,
 ) {
     for (entity, chunk_pos) in pending_chunks.iter() {
-        let mut neighbors = NeighborDensityFields::default();
-
-        for face in NeighborFace::ALL {
+        // Use the new gather method - much cleaner!
+        let neighbors = NeighborDensityFields::gather(|face| {
             let neighbor_pos = chunk_pos.0 + face.offset();
-
-            if let Some(neighbor_entity) = chunk_manager.get_chunk(&neighbor_pos)
-                && let Ok(neighbor_field) = all_fields.get(neighbor_entity)
-            {
-                neighbors.neighbors[face as usize] =
-                    Some(NeighborSlice::from_density_field(neighbor_field, face));
-            }
-        }
+            chunk_manager
+                .get_chunk(&neighbor_pos)
+                .and_then(|e| all_fields.get(e).ok())
+        });
 
         commands.entity(entity).insert(neighbors);
     }

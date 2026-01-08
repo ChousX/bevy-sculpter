@@ -2,10 +2,10 @@
 //!
 //! This module provides various brush types for interactive sculpting:
 //!
-//! - Hard CSG add/subtract operations via [`brush_sphere`](crate::helpers::brush_sphere)
-//! - Continuous smooth sculpting via [`brush_smooth`](crate::helpers::brush_smooth) and [`brush_smooth_timed`](crate::helpers::brush_smooth_timed)
-//! - Surface smoothing via [`brush_blur`](crate::helpers::brush_blur)
-//! - Terrain flattening via [`brush_flatten`](crate::helpers::brush_flatten)
+//! - Hard CSG add/subtract operations via [`brush_sphere`]
+//! - Continuous smooth sculpting via [`brush_smooth`] and [`brush_smooth_timed`]
+//! - Surface smoothing via [`brush_blur`]
+//! - Terrain flattening via [`brush_flatten`]
 //!
 //! # Coordinate System
 //!
@@ -18,7 +18,7 @@
 //! let grid_radius = world_radius * scale.x;
 //! ```
 
-use crate::{DENSITY_FIELD_SIZE, density_field::DensityField};
+use crate::{density_field::DensityField, field::Field};
 use bevy::prelude::*;
 
 /// Fills the density field with a sphere SDF.
@@ -41,13 +41,9 @@ use bevy::prelude::*;
 /// fill_sphere(&mut field, vec3(16.0, 16.0, 16.0), 10.0);
 /// ```
 pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) {
-    for z in 0..DENSITY_FIELD_SIZE.z {
-        for y in 0..DENSITY_FIELD_SIZE.y {
-            for x in 0..DENSITY_FIELD_SIZE.x {
-                let pos = vec3(x as f32, y as f32, z as f32);
-                density_field.set(x, y, z, pos.distance(center) - radius);
-            }
-        }
+    for pos in DensityField::positions() {
+        let pos_f = pos.as_vec3();
+        density_field.set(pos.x, pos.y, pos.z, pos_f.distance(center) - radius);
     }
 }
 
@@ -59,7 +55,7 @@ pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) 
 /// * `density_field` - The field to modify
 /// * `radius` - Sphere radius in grid units
 pub fn fill_centered_sphere(density_field: &mut DensityField, radius: f32) {
-    let center = DENSITY_FIELD_SIZE.as_vec3() / 2.0;
+    let center = DensityField::SIZE.as_vec3() / 2.0;
     fill_sphere(density_field, center, radius);
 }
 
@@ -94,7 +90,7 @@ pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32,
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DENSITY_FIELD_SIZE.as_vec3() - Vec3::ONE)
+        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -151,7 +147,7 @@ pub fn brush_smooth(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DENSITY_FIELD_SIZE.as_vec3() - Vec3::ONE)
+        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -252,7 +248,7 @@ pub fn brush_flatten(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DENSITY_FIELD_SIZE.as_vec3() - Vec3::ONE)
+        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -314,7 +310,7 @@ pub fn brush_blur(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DENSITY_FIELD_SIZE.as_vec3() - Vec3::ONE)
+        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     // First pass: compute averages (read-only)

@@ -26,15 +26,13 @@ use bevy::{
 };
 
 use crate::{
-    DENSITY_FIELD_SIZE, NULL_VERTEX,
-    density_field::DensityField,
-    neighbor::{NeighborDensityFields, NeighborFace},
+    NULL_VERTEX, density_field::DensityField, field::Field, neighbor::NeighborDensityFields,
 };
 
 /// World-space size of the mesh generated from a density field.
 ///
 /// This resource controls the scale of generated meshes. A density field
-/// always has [`DENSITY_FIELD_SIZE`] voxels, but this determines how large
+/// always has [`DensityField::SIZE`] voxels, but this determines how large
 /// that maps to in world coordinates.
 ///
 /// # Default
@@ -56,6 +54,48 @@ pub struct DensityFieldMeshSize(pub Vec3);
 impl Default for DensityFieldMeshSize {
     fn default() -> Self {
         Self(vec3(10., 10., 10.))
+    }
+}
+
+/// Sampler that reads from a field and its neighbors seamlessly.
+///
+/// This struct encapsulates the logic for sampling density values both
+/// within the local field and from neighboring chunks.
+struct FieldSampler<'a> {
+    field: &'a DensityField,
+    neighbors: &'a NeighborDensityFields,
+}
+
+impl<'a> FieldSampler<'a> {
+    fn new(field: &'a DensityField, neighbors: &'a NeighborDensityFields) -> Self {
+        Self { field, neighbors }
+    }
+
+    /// Sample density at signed coordinates, checking neighbors if out of bounds.
+    #[inline]
+    fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
+        // Try local field first
+        if let Some(value) = self.field.get_signed(x, y, z) {
+            return value;
+        }
+
+        // Try neighbors
+        if let Some(value) = self.neighbors.sample_for::<DensityField>(ivec3(x, y, z)) {
+            return value;
+        }
+
+        // Fallback: clamp to nearest in-bounds voxel
+        let size = DensityField::SIZE.as_ivec3();
+        let clamped_x = x.clamp(0, size.x - 1) as u32;
+        let clamped_y = y.clamp(0, size.y - 1) as u32;
+        let clamped_z = z.clamp(0, size.z - 1) as u32;
+        self.field.get(clamped_x, clamped_y, clamped_z)
+    }
+
+    /// Sample at IVec3 position.
+    #[inline]
+    fn sample_ivec3(&self, pos: IVec3) -> f32 {
+        self.sample(pos.x, pos.y, pos.z)
     }
 }
 
@@ -85,13 +125,16 @@ pub fn generate_mesh_cpu(
     neighbors: &NeighborDensityFields,
     mesh_size: Vec3,
 ) -> Option<Mesh> {
+    let sampler = FieldSampler::new(field, neighbors);
+    let field_size = DensityField::SIZE;
+
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     // Extended size: we generate vertices for voxels [0, SIZE] inclusive
     // The extra layer at SIZE uses neighbor data and allows seamless stitching
-    let extended_size = DENSITY_FIELD_SIZE + UVec3::ONE;
+    let extended_size = field_size + UVec3::ONE;
     let extended_volume = (extended_size.x * extended_size.y * extended_size.z) as usize;
     let mut vertex_lookup = vec![NULL_VERTEX; extended_volume];
 
@@ -100,117 +143,27 @@ pub fn generate_mesh_cpu(
         (x + y * extended_size.x + z * extended_size.x * extended_size.y) as usize
     };
 
-    let size_x = DENSITY_FIELD_SIZE.x as i32;
-    let size_y = DENSITY_FIELD_SIZE.y as i32;
-    let size_z = DENSITY_FIELD_SIZE.z as i32;
-
-    // Sample function that handles neighbor lookups with proper depth
-    let sample = |x: i32, y: i32, z: i32| -> f32 {
-        // In bounds - direct sample
-        if x >= 0 && y >= 0 && z >= 0 && x < size_x && y < size_y && z < size_z {
-            return field.get(x as u32, y as u32, z as u32);
-        }
-
-        // -X neighbor (x < 0)
-        if x < 0
-            && y >= 0
-            && z >= 0
-            && y < size_y
-            && z < size_z
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegX as usize]
-        {
-            let depth = (-1 - x) as u32;
-            return slice.get(y as u32, z as u32, depth);
-        }
-
-        // +X neighbor (x >= SIZE)
-        if x >= size_x
-            && y >= 0
-            && z >= 0
-            && y < size_y
-            && z < size_z
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosX as usize]
-        {
-            let depth = (x - size_x) as u32;
-            return slice.get(y as u32, z as u32, depth);
-        }
-
-        // -Y neighbor (y < 0)
-        if y < 0
-            && x >= 0
-            && z >= 0
-            && x < size_x
-            && z < size_z
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegY as usize]
-        {
-            let depth = (-1 - y) as u32;
-            return slice.get(x as u32, z as u32, depth);
-        }
-
-        // +Y neighbor (y >= SIZE)
-        if y >= size_y
-            && x >= 0
-            && z >= 0
-            && x < size_x
-            && z < size_z
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosY as usize]
-        {
-            let depth = (y - size_y) as u32;
-            return slice.get(x as u32, z as u32, depth);
-        }
-
-        // -Z neighbor (z < 0)
-        if z < 0
-            && x >= 0
-            && y >= 0
-            && x < size_x
-            && y < size_y
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::NegZ as usize]
-        {
-            let depth = (-1 - z) as u32;
-            return slice.get(x as u32, y as u32, depth);
-        }
-
-        // +Z neighbor (z >= SIZE)
-        if z >= size_z
-            && x >= 0
-            && y >= 0
-            && x < size_x
-            && y < size_y
-            && let Some(ref slice) = neighbors.neighbors[NeighborFace::PosZ as usize]
-        {
-            let depth = (z - size_z) as u32;
-            return slice.get(x as u32, y as u32, depth);
-        }
-
-        // Edge/corner cases involving multiple neighbors - return outside
-        let clamped_x = x.clamp(0, size_x - 1) as u32;
-        let clamped_y = y.clamp(0, size_y - 1) as u32;
-        let clamped_z = z.clamp(0, size_z - 1) as u32;
-        field.get(clamped_x, clamped_y, clamped_z)
-    };
-
     // Cube corners (offsets from voxel origin)
-    const CORNERS: [[i32; 3]; 8] = [
-        [0, 0, 0], // 0
-        [1, 0, 0], // 1
-        [0, 1, 0], // 2
-        [1, 1, 0], // 3
-        [0, 0, 1], // 4
-        [1, 0, 1], // 5
-        [0, 1, 1], // 6
-        [1, 1, 1], // 7
+    const CORNERS: [IVec3; 8] = [
+        IVec3::new(0, 0, 0),
+        IVec3::new(1, 0, 0),
+        IVec3::new(0, 1, 0),
+        IVec3::new(1, 1, 0),
+        IVec3::new(0, 0, 1),
+        IVec3::new(1, 0, 1),
+        IVec3::new(0, 1, 1),
+        IVec3::new(1, 1, 1),
     ];
 
-    const CORNER_VECS: [[f32; 3]; 8] = [
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [1.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0],
+    const CORNER_VECS: [Vec3; 8] = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 1.0),
+        Vec3::new(0.0, 1.0, 1.0),
+        Vec3::new(1.0, 1.0, 1.0),
     ];
 
     // 12 edges of a cube, each connecting two corners
@@ -229,25 +182,24 @@ pub fn generate_mesh_cpu(
         [6, 7], // edge from corner 6
     ];
 
-    let grid_to_world = |gx: f32, gy: f32, gz: f32| -> [f32; 3] {
-        let scale = mesh_size / DENSITY_FIELD_SIZE.as_vec3();
-        [gx * scale.x, gy * scale.y, gz * scale.z]
+    let scale = mesh_size / field_size.as_vec3();
+    let grid_to_world = |grid_pos: Vec3| -> [f32; 3] {
+        let world = grid_pos * scale;
+        [world.x, world.y, world.z]
     };
 
     // Pass 1: Generate vertices for each voxel that contains a surface
-    for z in 0..=DENSITY_FIELD_SIZE.z {
-        for y in 0..=DENSITY_FIELD_SIZE.y {
-            for x in 0..=DENSITY_FIELD_SIZE.x {
-                let ix = x as i32;
-                let iy = y as i32;
-                let iz = z as i32;
+    for z in 0..=field_size.z {
+        for y in 0..=field_size.y {
+            for x in 0..=field_size.x {
+                let voxel = ivec3(x as i32, y as i32, z as i32);
 
                 // Sample the 8 corners of this voxel's cube
                 let mut corner_dists = [0.0f32; 8];
                 let mut num_negative = 0;
 
-                for (i, c) in CORNERS.iter().enumerate() {
-                    corner_dists[i] = sample(ix + c[0], iy + c[1], iz + c[2]);
+                for (i, offset) in CORNERS.iter().enumerate() {
+                    corner_dists[i] = sampler.sample_ivec3(voxel + *offset);
                     if corner_dists[i] < 0.0 {
                         num_negative += 1;
                     }
@@ -262,7 +214,7 @@ pub fn generate_mesh_cpu(
                 }
 
                 // Calculate centroid of edge intersection points (Surface Nets method)
-                let mut sum = [0.0f32; 3];
+                let mut sum = Vec3::ZERO;
                 let mut count = 0.0;
 
                 for edge in &EDGES {
@@ -275,41 +227,39 @@ pub fn generate_mesh_cpu(
                         let t = d1 / (d1 - d2);
                         let c1 = CORNER_VECS[edge[0]];
                         let c2 = CORNER_VECS[edge[1]];
-                        sum[0] += c1[0] + t * (c2[0] - c1[0]);
-                        sum[1] += c1[1] + t * (c2[1] - c1[1]);
-                        sum[2] += c1[2] + t * (c2[2] - c1[2]);
+                        sum += c1 + t * (c2 - c1);
                         count += 1.0;
                     }
                 }
 
                 let centroid = if count > 0.0 {
-                    [sum[0] / count, sum[1] / count, sum[2] / count]
+                    sum / count
                 } else {
-                    [0.5, 0.5, 0.5]
+                    Vec3::splat(0.5)
                 };
 
                 // Convert to world position
-                let grid_pos = [
-                    x as f32 + centroid[0],
-                    y as f32 + centroid[1],
-                    z as f32 + centroid[2],
-                ];
-                let world_pos = grid_to_world(grid_pos[0], grid_pos[1], grid_pos[2]);
+                let grid_pos = voxel.as_vec3() + centroid;
+                let world_pos = grid_to_world(grid_pos);
 
                 // Calculate normal via central differences gradient
-                let dx = sample(ix + 1, iy, iz) - sample(ix - 1, iy, iz);
-                let dy = sample(ix, iy + 1, iz) - sample(ix, iy - 1, iz);
-                let dz = sample(ix, iy, iz + 1) - sample(ix, iy, iz - 1);
-                let len = (dx * dx + dy * dy + dz * dz).sqrt();
-                let normal = if len > 0.0001 {
-                    [dx / len, dy / len, dz / len]
+                let dx = sampler.sample(voxel.x + 1, voxel.y, voxel.z)
+                    - sampler.sample(voxel.x - 1, voxel.y, voxel.z);
+                let dy = sampler.sample(voxel.x, voxel.y + 1, voxel.z)
+                    - sampler.sample(voxel.x, voxel.y - 1, voxel.z);
+                let dz = sampler.sample(voxel.x, voxel.y, voxel.z + 1)
+                    - sampler.sample(voxel.x, voxel.y, voxel.z - 1);
+
+                let gradient = vec3(dx, dy, dz);
+                let normal = if gradient.length_squared() > 0.0001 {
+                    gradient.normalize()
                 } else {
-                    [0.0, 1.0, 0.0]
+                    Vec3::Y
                 };
 
                 vertex_lookup[stride] = positions.len() as u32;
                 positions.push(world_pos);
-                normals.push(normal);
+                normals.push(normal.into());
             }
         }
     }
@@ -323,9 +273,9 @@ pub fn generate_mesh_cpu(
     let ext_stride_y = extended_size.x as usize;
     let ext_stride_z = (extended_size.x * extended_size.y) as usize;
 
-    for z in 1..=DENSITY_FIELD_SIZE.z {
-        for y in 1..=DENSITY_FIELD_SIZE.y {
-            for x in 1..=DENSITY_FIELD_SIZE.x {
+    for z in 1..=field_size.z {
+        for y in 1..=field_size.y {
+            for x in 1..=field_size.x {
                 let stride = ext_index(x, y, z);
                 let v0 = vertex_lookup[stride];
 
@@ -333,14 +283,12 @@ pub fn generate_mesh_cpu(
                     continue;
                 }
 
-                let ix = x as i32;
-                let iy = y as i32;
-                let iz = z as i32;
+                let voxel = ivec3(x as i32, y as i32, z as i32);
 
-                let d0 = sample(ix, iy, iz);
-                let dx = sample(ix + 1, iy, iz);
-                let dy = sample(ix, iy + 1, iz);
-                let dz = sample(ix, iy, iz + 1);
+                let d0 = sampler.sample_ivec3(voxel);
+                let dx = sampler.sample_ivec3(voxel + IVec3::X);
+                let dy = sampler.sample_ivec3(voxel + IVec3::Y);
+                let dz = sampler.sample_ivec3(voxel + IVec3::Z);
 
                 // X-axis edge
                 if (d0 < 0.0) != (dx < 0.0) {
