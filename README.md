@@ -21,6 +21,7 @@ SDF-based voxel sculpting and Surface Nets meshing for Bevy.
 
 | bevy-sculpter | Bevy |
 |---------------|------|
+| 0.18          | 0.18 |
 | 0.1           | 0.17 |
 
 ## Quick Start

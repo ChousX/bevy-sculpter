@@ -58,7 +58,7 @@ use bevy::prelude::*;
 use chunky_bevy::ChunkyPlugin;
 pub use chunky_bevy::prelude::{ChunkManager, ChunkPos};
 
-use crate::{
+pub use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
     prelude::{DensityField, GenerateMesh, NeighborDensityFields},
@@ -143,16 +143,6 @@ impl Plugin for SurfaceNetsPlugin {
 
 /// Auto-mark chunks for mesh generation when their density field changes
 #[cfg(feature = "auto-mesh")]
-fn auto_mark_generate(
-    mut commands: Commands,
-    changed: Query<Entity, (Changed<DensityField>, Without<GenerateMesh>)>,
-) {
-    for entity in changed.iter() {
-        commands.entity(entity).insert(GenerateMesh);
-    }
-}
-
-/// Auto-mark chunks for mesh generation when their density field changes
 fn auto_mark_generate(
     mut commands: Commands,
     changed: Query<Entity, (Changed<DensityField>, Without<GenerateMesh>)>,
