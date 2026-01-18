@@ -4,32 +4,9 @@
 //! Negative values represent the interior of a shape, positive values the exterior,
 //! and the zero-crossing defines the surface.
 
-use crate::{DENSITY_FIELD_SIZE, FIELD_VOLUME, field::Field};
+use crate::field::Field;
 use bevy::prelude::*;
 
-/// A 3D grid of signed distance field (SDF) values.
-///
-/// Each voxel stores a floating-point density value where:
-/// - **Negative** = inside the surface
-/// - **Positive** = outside the surface  
-/// - **Zero** = on the surface
-///
-/// The field is stored as a flat `Vec<f32>` in X-Y-Z order (X varies fastest).
-///
-/// # Example
-///
-/// ```
-/// use bevy_sculpter::prelude::*;
-///
-/// let mut field = DensityField::new();
-///
-/// // Set a single voxel to be inside
-/// field.set(16, 16, 16, -1.0);
-///
-/// // Query a voxel
-/// let density = field.get(16, 16, 16);
-/// assert!(density < 0.0); // Inside
-/// ```
 #[derive(Component, Clone, Deref, DerefMut, Debug)]
 pub struct DensityField(pub Vec<f32>);
 
@@ -89,9 +66,6 @@ impl DensityField {
     pub fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool {
         self.get(x, y, z).abs() <= threshold
     }
-
-    // ... rest of the SDF-specific methods (nearest_interior, raycasting, redistancing, etc.)
-    // remain unchanged ...
 }
 
 /// Result of finding the nearest interior point in a density field.
@@ -106,8 +80,6 @@ pub struct NearestInteriorResult {
     /// Squared distance from query point to this voxel (in grid space).
     pub distance_sq: f32,
 }
-
-// ... rest of the file (raycasting, redistancing, etc.) remains the same ...
 
 /// Marker component indicating this chunk needs remeshing.
 #[derive(Component, Clone, Copy, Default, Debug)]

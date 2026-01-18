@@ -12,34 +12,17 @@ categories = ["game-development", "rendering::data-formats"]
 [dependencies]
 bevy = { version = "0.18", features = ["wayland"] }
 bytemuck = "1.24.0"
-chunky-bevy = "0.18"
+chunky-bevy = {git = "https://github.com/ChousX/chunky-bevy.git", branch = "instance" } 
 
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
 
-
-
 [features]
 # Default to a native dev build.
 default = []
-
-dev = [
-    # Improve compile times for dev builds by linking Bevy as a dynamic library.
-    "bevy/dynamic_linking",
-    "bevy/bevy_dev_tools",
-    "bevy/bevy_ui_debug",
-    # Improve error messages coming from Bevy
-    "bevy/track_location",
-]
-dev_native = [
-    "dev",
-    # Enable asset hot reloading for native dev builds.
-    "bevy/file_watcher",
-    # Enable embedded asset hot reloading for native dev builds.
-    "bevy/embedded_watcher",
-]
 auto-mesh = []
+
 [package.metadata.bevy_cli.release]
 # Disable dev features for release builds.
 default-features = false

@@ -1,68 +1,10 @@
-//! # bevy-sculpter
-//!
-//! SDF-based voxel sculpting and Surface Nets meshing for Bevy.
-//!
-//! This crate provides tools for creating and manipulating volumetric data using
-//! signed distance fields (SDFs), with automatic mesh generation via the Surface Nets
-//! algorithm.
-//!
-//! ## Quick Start
-//!
-//! ```no_run
-//! use bevy::prelude::*;
-//! use bevy_sculpter::prelude::*;
-//! use chunky_bevy::prelude::*;
-//!
-//! fn main() {
-//!     App::new()
-//!         .add_plugins(DefaultPlugins)
-//!         .add_plugins(ChunkyPlugin::default())
-//!         .add_plugins(SurfaceNetsPlugin::default())
-//!         .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
-//!         .add_systems(Startup, setup)
-//!         .run();
-//! }
-//!
-//! fn setup(mut commands: Commands) {
-//!     let mut field = DensityField::new();
-//!     bevy_sculpter::helpers::fill_centered_sphere(&mut field, 12.0);
-//!     
-//!     commands.spawn((
-//!         Chunk,
-//!         ChunkPos(ivec3(0, 0, 0)),
-//!         field,
-//!         GenerateMesh,
-//!     ));
-//! }
-//! ```
-//!
-//! ## Features
-//!
-//! - **[`DensityField`]**: SDF-based volumetric storage with raycasting and nearest-point queries
-//! - **[`SurfaceNetsPlugin`]**: Automatic mesh generation with seamless chunk boundaries
-//! - **[`helpers`]**: Sculpting brushes (smooth, hard, blur, flatten)
-//! - **[`neighbor`]**: Generic neighbor data structures for seamless chunk boundaries
-//!
-//! ## Stability
-//!
-//! This crate is under active development. Breaking changes may occur between minor versions
-//! until 1.0 is released.
-
-// Surface Nets implementation inspired by fast-surface-nets-rs
-// https://github.com/bonsairobo/fast-surface-nets-rs
-// Original work Copyright 2021 bonsairobo, dual-licensed MIT/Apache-2.0
-
-#![warn(missing_docs)]
-
-use bevy::prelude::*;
-use chunky_bevy::ChunkyPlugin;
-pub use chunky_bevy::prelude::{ChunkManager, ChunkPos};
-
 pub use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
     prelude::{DensityField, GenerateMesh, NeighborDensityFields},
 };
+use bevy::prelude::*;
+use chunky_bevy::prelude::*;
 
 /// Density field storage and SDF operations.
 pub mod density_field;
@@ -77,7 +19,7 @@ pub mod neighbor;
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
     pub use crate::{
-        DENSITY_FIELD_SIZE,
+        DefaultChunkManager,
         SurfaceNetsPlugin,
         density_field::{DensityField, GenerateMesh},
         field::Field,
@@ -91,54 +33,38 @@ pub mod prelude {
 }
 
 /// Size of the density field grid per chunk (32×32×32 voxels).
-pub const DENSITY_FIELD_SIZE: UVec3 = uvec3(32, 32, 32);
-
+const FIELD_SIZE: UVec3 = uvec3(32, 32, 32);
 /// Total number of voxels per chunk.
-pub const FIELD_VOLUME: usize =
-    (DENSITY_FIELD_SIZE.x * DENSITY_FIELD_SIZE.y * DENSITY_FIELD_SIZE.z) as usize;
-
+const FIELD_VOLUME: usize = (FIELD_SIZE.x * FIELD_SIZE.y * FIELD_SIZE.z) as usize;
 /// Sentinel value indicating no vertex exists at a position.
-pub const NULL_VERTEX: u32 = u32::MAX;
+const NULL_VERTEX: u32 = u32::MAX;
 
-/// Plugin that enables automatic Surface Nets mesh generation for chunks with density fields.
-///
-/// When added to your app, this plugin will automatically generate and update meshes for any
-/// entity that has both a [`DensityField`] and [`GenerateMesh`] components.
-///
-/// # Auto-marking
-///
-/// By default (with the `auto-mesh` feature enabled), chunks are automatically marked for
-/// meshing when their [`DensityField`] changes. Disable this feature for manual control:
-///
-/// ```toml
-/// bevy-sculpter = { version = "...", default-features = false }
-/// ```
-///
-/// # Example
-///
-/// ```no_run
-/// use bevy::prelude::*;
-/// use bevy_sculpter::prelude::*;
-/// use chunky_bevy::prelude::*;
-///
-/// App::new()
-///     .add_plugins(DefaultPlugins)
-///     .add_plugins(ChunkyPlugin::default())
-///     .add_plugins(SurfaceNetsPlugin)
-///     .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)));
-/// ```
 pub struct SurfaceNetsPlugin;
 
 impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ChunkyPlugin::default())
+        app.add_plugins(ChunkyPlugin)
             .init_resource::<DensityFieldMeshSize>();
 
         #[cfg(feature = "auto-mesh")]
         app.add_systems(Update, auto_mark_generate);
 
-        app.add_systems(Update, (gather_neighbor_fields, process_chunks).chain());
+        app.add_systems(
+            Update,
+            (
+                gather_neighbor_fields::<DefaultChunkManagerResource>,
+                process_chunks,
+            )
+                .chain(),
+        );
     }
+}
+
+pub type DefaultChunkManager = ChunkManagerResource<DefaultChunkManagerResource>;
+
+pub struct DefaultChunkManagerResource;
+impl ChunkManaging for DefaultChunkManagerResource {
+    const SIZE: Vec3 = vec3(10.0, 10.0, 10.0);
 }
 
 /// Auto-mark chunks for mesh generation when their density field changes
@@ -153,12 +79,18 @@ fn auto_mark_generate(
 }
 
 /// Gather neighbor density slices for chunks pending mesh generation
-fn gather_neighbor_fields(
+pub fn gather_neighbor_fields<T>(
     mut commands: Commands,
-    pending_chunks: Query<(Entity, &ChunkPos), (With<GenerateMesh>, With<DensityField>)>,
+    pending_chunks: Query<(Entity, &ChunkPositon), (With<GenerateMesh>, With<DensityField>)>,
     all_fields: Query<&DensityField>,
-    chunk_manager: Res<ChunkManager>,
-) {
+    chunk_manager_resource: Res<ChunkManagerResource<T>>,
+    chunk_managers: Query<&ChunkManager>,
+) where
+    T: ChunkManaging + Send + Sync + 'static,
+{
+    let chunk_manager = chunk_managers
+        .get(chunk_manager_resource.entity)
+        .expect("Missing ChunkManager Entity");
     for (entity, chunk_pos) in pending_chunks.iter() {
         // Use the new gather method - much cleaner!
         let neighbors = NeighborDensityFields::gather(|face| {

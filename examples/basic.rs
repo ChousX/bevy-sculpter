@@ -33,7 +33,7 @@ impl Default for FlyCam {
     }
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, cmr: Res<DefaultChunkManager>) {
     // Spawn a 3x3x3 grid of chunks with density fields
     for x in -1..=1 {
         for y in -1..=1 {
@@ -47,7 +47,12 @@ fn setup(mut commands: Commands) {
                 let local_sphere_center = sphere_center - global_offset + local_center;
 
                 bevy_sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
-                commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, GenerateMesh));
+                commands.spawn((
+                    Chunk(cmr.entity),
+                    ChunkPositon(ivec3(x, y, z)),
+                    field,
+                    GenerateMesh,
+                ));
             }
         }
     }

@@ -44,7 +44,11 @@ impl Default for FlyCam {
     }
 }
 
-fn setup(mut commands: Commands, mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+fn setup(
+    mut commands: Commands,
+    mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    cmr: Res<DefaultChunkManager>,
+) {
     // Create a hollow sphere by subtracting a smaller sphere from a larger one
     let mut field = DensityField::new();
     let center = vec3(16.0, 16.0, 16.0);
@@ -57,7 +61,12 @@ fn setup(mut commands: Commands, mut windows: Query<&mut CursorOptions, With<Pri
     // Carve out inner sphere to make it hollow
     bevy_sculpter::helpers::brush_sphere(&mut field, center, inner_radius, false);
 
-    commands.spawn((Chunk, ChunkPos(ivec3(0, 0, 0)), field, DensityFieldDirty));
+    commands.spawn((
+        Chunk(cmr.entity),
+        ChunkPositon(ivec3(0, 0, 0)),
+        field,
+        GenerateMesh,
+    ));
 
     // Camera starts at the center, inside the hollow sphere
     commands.spawn((
@@ -67,7 +76,7 @@ fn setup(mut commands: Commands, mut windows: Query<&mut CursorOptions, With<Pri
     ));
 
     // Ambient light to see the interior
-    commands.insert_resource(AmbientLight {
+    commands.spawn(AmbientLight {
         color: Color::WHITE,
         brightness: 800.0,
         affects_lightmapped_meshes: false,
