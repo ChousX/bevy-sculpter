@@ -31,7 +31,7 @@ impl Field<f32> for DefaultIsoField {
     }
 }
 
-trait IsoField {
+pub trait IsoField {
     /// Creates a new density field with all voxels set to exterior (1.0).
     // =========================================================================
     // SDF-specific operations (not part of generic Field trait)

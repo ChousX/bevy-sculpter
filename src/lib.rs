@@ -21,7 +21,7 @@ pub mod prelude {
     pub use crate::{
         DefaultChunkManager,
         SurfaceNetsPlugin,
-        density_field::{DefaultIsoField, GenerateMesh},
+        density_field::{DefaultIsoField, GenerateMesh, IsoField},
         field::Field,
         mesher::DensityFieldMeshSize,
         // Export generic neighbor types for reuse
