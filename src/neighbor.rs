@@ -361,7 +361,7 @@ pub type NeighborMaterialFields = NeighborFields<u8>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::density_field::DensityField;
+    use crate::density_field::DefaultIsoField;
     use crate::field::Field;
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_from_field_trait() {
-        let mut field = DensityField::new();
+        let mut field = DefaultIsoField::new();
         // Set a recognizable value at the boundary
         field.set(31, 5, 10, -0.5);
 
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_neighbor_fields_gather() {
-        let field = DensityField::filled(-1.0);
+        let field = DefaultIsoField::filled(-1.0);
 
         // Simulate gathering - only PosX neighbor exists
         let neighbors = NeighborFields::gather(|face| {
@@ -462,7 +462,7 @@ mod tests {
 
         // Sample from the PosX neighbor
         assert_eq!(
-            neighbors.sample_for::<DensityField>(ivec3(32, 5, 5)),
+            neighbors.sample_for::<DefaultIsoField>(ivec3(32, 5, 5)),
             Some(-1.0)
         );
     }
@@ -471,13 +471,13 @@ mod tests {
     fn test_sample_for_convenience() {
         let mut fields: NeighborDensityFields = NeighborFields::default();
 
-        let field = DensityField::filled(-0.25);
+        let field = DefaultIsoField::filled(-0.25);
         fields.neighbors[NeighborFace::NegY as usize] =
             Some(NeighborSlice::from_field(&field, NeighborFace::NegY));
 
         // Use the convenience method that infers field size
         assert_eq!(
-            fields.sample_for::<DensityField>(ivec3(5, -1, 5)),
+            fields.sample_for::<DefaultIsoField>(ivec3(5, -1, 5)),
             Some(-0.25)
         );
     }

@@ -18,7 +18,7 @@
 //! let grid_radius = world_radius * scale.x;
 //! ```
 
-use crate::{density_field::DensityField, field::Field};
+use crate::{density_field::DefaultIsoField, field::Field};
 use bevy::prelude::*;
 
 /// Fills the density field with a sphere SDF.
@@ -40,8 +40,8 @@ use bevy::prelude::*;
 /// let mut field = DensityField::new();
 /// fill_sphere(&mut field, vec3(16.0, 16.0, 16.0), 10.0);
 /// ```
-pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) {
-    for pos in DensityField::positions() {
+pub fn fill_sphere(density_field: &mut DefaultIsoField, center: Vec3, radius: f32) {
+    for pos in DefaultIsoField::positions() {
         let pos_f = pos.as_vec3();
         density_field.set(pos.x, pos.y, pos.z, pos_f.distance(center) - radius);
     }
@@ -54,8 +54,8 @@ pub fn fill_sphere(density_field: &mut DensityField, center: Vec3, radius: f32) 
 /// # Arguments
 /// * `density_field` - The field to modify
 /// * `radius` - Sphere radius in grid units
-pub fn fill_centered_sphere(density_field: &mut DensityField, radius: f32) {
-    let center = DensityField::SIZE.as_vec3() / 2.0;
+pub fn fill_centered_sphere(density_field: &mut DefaultIsoField, radius: f32) {
+    let center = DefaultIsoField::SIZE.as_vec3() / 2.0;
     fill_sphere(density_field, center, radius);
 }
 
@@ -85,12 +85,12 @@ pub fn fill_centered_sphere(density_field: &mut DensityField, radius: f32) {
 /// // Carve out a smaller sphere
 /// brush_sphere(&mut field, vec3(20.0, 16.0, 16.0), 4.0, false);
 /// ```
-pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32, add: bool) {
+pub fn brush_sphere(density_field: &mut DefaultIsoField, center: Vec3, radius: f32, add: bool) {
     let min = (center - Vec3::splat(radius + 1.0))
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
+        .min(DefaultIsoField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -137,7 +137,7 @@ pub fn brush_sphere(density_field: &mut DensityField, center: Vec3, radius: f32,
 /// brush_smooth(&mut field, vec3(16.0, 16.0, 16.0), 5.0, -0.5, 2.0);
 /// ```
 pub fn brush_smooth(
-    density_field: &mut DensityField,
+    density_field: &mut DefaultIsoField,
     center: Vec3,
     radius: f32,
     strength: f32,
@@ -147,7 +147,7 @@ pub fn brush_smooth(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
+        .min(DefaultIsoField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -202,7 +202,7 @@ pub fn brush_smooth(
 /// }
 /// ```
 pub fn brush_smooth_timed(
-    density_field: &mut DensityField,
+    density_field: &mut DefaultIsoField,
     center: Vec3,
     radius: f32,
     rate: f32,
@@ -237,7 +237,7 @@ pub fn brush_smooth_timed(
 /// brush_flatten(&mut field, vec3(16.0, 16.0, 16.0), 8.0, 16.0, 0.5, 2.0);
 /// ```
 pub fn brush_flatten(
-    density_field: &mut DensityField,
+    density_field: &mut DefaultIsoField,
     center: Vec3,
     radius: f32,
     target_height: f32,
@@ -248,7 +248,7 @@ pub fn brush_flatten(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
+        .min(DefaultIsoField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     for z in min.z..=max.z {
@@ -300,7 +300,7 @@ pub fn brush_flatten(
 /// brush_blur(&mut field, vec3(16.0, 16.0, 16.0), 5.0, 0.5, 2.0);
 /// ```
 pub fn brush_blur(
-    density_field: &mut DensityField,
+    density_field: &mut DefaultIsoField,
     center: Vec3,
     radius: f32,
     strength: f32,
@@ -310,7 +310,7 @@ pub fn brush_blur(
         .max(Vec3::ZERO)
         .as_ivec3();
     let max = (center + Vec3::splat(radius + 1.0))
-        .min(DensityField::SIZE.as_vec3() - Vec3::ONE)
+        .min(DefaultIsoField::SIZE.as_vec3() - Vec3::ONE)
         .as_ivec3();
 
     // First pass: compute averages (read-only)

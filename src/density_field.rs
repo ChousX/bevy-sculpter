@@ -8,16 +8,16 @@ use crate::field::Field;
 use bevy::prelude::*;
 
 #[derive(Component, Clone, Deref, DerefMut, Debug)]
-pub struct DensityField(pub Vec<f32>);
+pub struct DefaultIsoField(pub Vec<f32>);
 
-impl Default for DensityField {
+impl Default for DefaultIsoField {
     fn default() -> Self {
-        Self(vec![1.0; FIELD_VOLUME]) // All outside
+        Self(vec![1.0; Self::VOLUME]) // All outside
     }
 }
 
-impl Field<f32> for DensityField {
-    const SIZE: UVec3 = DENSITY_FIELD_SIZE;
+impl Field<f32> for DefaultIsoField {
+    const SIZE: UVec3 = uvec3(32, 32, 32);
     const DEFAULT: f32 = 1.0; // Outside = exterior
 
     #[inline]
@@ -31,39 +31,38 @@ impl Field<f32> for DensityField {
     }
 }
 
-impl DensityField {
+trait IsoField {
     /// Creates a new density field with all voxels set to exterior (1.0).
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Creates a density field with all voxels set to the given value.
-    ///
-    /// # Arguments
-    /// * `value` - The density value for all voxels (negative = inside, positive = outside)
-    pub fn filled(value: f32) -> Self {
-        Self(vec![value; FIELD_VOLUME])
-    }
-
     // =========================================================================
     // SDF-specific operations (not part of generic Field trait)
     // =========================================================================
 
     /// Checks if a voxel is inside the surface (negative density).
     #[inline]
-    pub fn is_inside(&self, x: u32, y: u32, z: u32) -> bool {
-        self.get(x, y, z) < 0.0
-    }
+    fn is_inside(&self, x: u32, y: u32, z: u32) -> bool;
 
     /// Checks if a voxel is outside the surface (positive density).
     #[inline]
-    pub fn is_outside(&self, x: u32, y: u32, z: u32) -> bool {
-        self.get(x, y, z) > 0.0
-    }
+    fn is_outside(&self, x: u32, y: u32, z: u32) -> bool;
 
     /// Checks if a voxel is on the surface (near zero density).
     #[inline]
-    pub fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool {
+    fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool;
+}
+
+impl IsoField for DefaultIsoField {
+    #[inline]
+    fn is_inside(&self, x: u32, y: u32, z: u32) -> bool {
+        self.get(x, y, z) < 0.0
+    }
+
+    #[inline]
+    fn is_outside(&self, x: u32, y: u32, z: u32) -> bool {
+        self.get(x, y, z) > 0.0
+    }
+
+    #[inline]
+    fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool {
         self.get(x, y, z).abs() <= threshold
     }
 }

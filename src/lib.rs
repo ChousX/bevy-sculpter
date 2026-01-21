@@ -1,7 +1,7 @@
 pub use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
-    prelude::{DensityField, GenerateMesh, NeighborDensityFields},
+    prelude::{DefaultIsoField, GenerateMesh, NeighborDensityFields},
 };
 use bevy::prelude::*;
 use chunky_bevy::prelude::*;
@@ -21,7 +21,7 @@ pub mod prelude {
     pub use crate::{
         DefaultChunkManager,
         SurfaceNetsPlugin,
-        density_field::{DensityField, GenerateMesh},
+        density_field::{DefaultIsoField, GenerateMesh},
         field::Field,
         mesher::DensityFieldMeshSize,
         // Export generic neighbor types for reuse
@@ -31,13 +31,6 @@ pub mod prelude {
         },
     };
 }
-
-/// Size of the density field grid per chunk (32×32×32 voxels).
-const FIELD_SIZE: UVec3 = uvec3(32, 32, 32);
-/// Total number of voxels per chunk.
-const FIELD_VOLUME: usize = (FIELD_SIZE.x * FIELD_SIZE.y * FIELD_SIZE.z) as usize;
-/// Sentinel value indicating no vertex exists at a position.
-const NULL_VERTEX: u32 = u32::MAX;
 
 pub struct SurfaceNetsPlugin;
 
@@ -49,14 +42,22 @@ impl Plugin for SurfaceNetsPlugin {
         #[cfg(feature = "auto-mesh")]
         app.add_systems(Update, auto_mark_generate);
 
-        app.add_systems(
-            Update,
-            (
-                gather_neighbor_fields::<DefaultChunkManagerResource>,
-                process_chunks,
-            )
-                .chain(),
-        );
+        app.add_systems(Update, (process_chunks,).chain());
+        app.register_sculpter_instance::<DefaultChunkManagerResource>();
+    }
+}
+
+pub trait RegisterSufaceNetsChunkManager {
+    fn register_sculpter_instance<T: ChunkManaging + Send + Sync + 'static>(&mut self)
+    -> &mut Self;
+}
+impl RegisterSufaceNetsChunkManager for App {
+    fn register_sculpter_instance<T: ChunkManaging + Send + Sync + 'static>(
+        &mut self,
+    ) -> &mut Self {
+        self.add_systems(PreUpdate, gather_neighbor_fields::<T>)
+            .init_resource::<ChunkManagerResource<T>>();
+        self
     }
 }
 
@@ -71,7 +72,7 @@ impl ChunkManaging for DefaultChunkManagerResource {
 #[cfg(feature = "auto-mesh")]
 fn auto_mark_generate(
     mut commands: Commands,
-    changed: Query<Entity, (Changed<DensityField>, Without<GenerateMesh>)>,
+    changed: Query<Entity, (Changed<DefaultIsoField>, Without<GenerateMesh>)>,
 ) {
     for entity in changed.iter() {
         commands.entity(entity).insert(GenerateMesh);
@@ -81,16 +82,16 @@ fn auto_mark_generate(
 /// Gather neighbor density slices for chunks pending mesh generation
 pub fn gather_neighbor_fields<T>(
     mut commands: Commands,
-    pending_chunks: Query<(Entity, &ChunkPositon), (With<GenerateMesh>, With<DensityField>)>,
-    all_fields: Query<&DensityField>,
+    pending_chunks: Query<(Entity, &ChunkPositon), (With<GenerateMesh>, With<DefaultIsoField>)>,
+    all_fields: Query<&DefaultIsoField>,
     chunk_manager_resource: Res<ChunkManagerResource<T>>,
     chunk_managers: Query<&ChunkManager>,
 ) where
     T: ChunkManaging + Send + Sync + 'static,
 {
-    let chunk_manager = chunk_managers
-        .get(chunk_manager_resource.entity)
-        .expect("Missing ChunkManager Entity");
+    let Ok(chunk_manager) = chunk_managers.get(chunk_manager_resource.entity) else {
+        return;
+    };
     for (entity, chunk_pos) in pending_chunks.iter() {
         // Use the new gather method - much cleaner!
         let neighbors = NeighborDensityFields::gather(|face| {
@@ -110,7 +111,7 @@ fn process_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     pending_chunks: Query<
-        (Entity, &DensityField, Option<&NeighborDensityFields>),
+        (Entity, &DefaultIsoField, Option<&NeighborDensityFields>),
         With<GenerateMesh>,
     >,
     mesh_size: Res<DensityFieldMeshSize>,

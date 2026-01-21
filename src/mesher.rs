@@ -26,7 +26,7 @@ use bevy::{
 };
 
 use crate::{
-    NULL_VERTEX, density_field::DensityField, field::Field, neighbor::NeighborDensityFields,
+    NULL_VERTEX, density_field::DefaultIsoField, field::Field, neighbor::NeighborDensityFields,
 };
 
 /// World-space size of the mesh generated from a density field.
@@ -62,12 +62,12 @@ impl Default for DensityFieldMeshSize {
 /// This struct encapsulates the logic for sampling density values both
 /// within the local field and from neighboring chunks.
 struct FieldSampler<'a> {
-    field: &'a DensityField,
+    field: &'a DefaultIsoField,
     neighbors: &'a NeighborDensityFields,
 }
 
 impl<'a> FieldSampler<'a> {
-    fn new(field: &'a DensityField, neighbors: &'a NeighborDensityFields) -> Self {
+    fn new(field: &'a DefaultIsoField, neighbors: &'a NeighborDensityFields) -> Self {
         Self { field, neighbors }
     }
 
@@ -80,12 +80,12 @@ impl<'a> FieldSampler<'a> {
         }
 
         // Try neighbors
-        if let Some(value) = self.neighbors.sample_for::<DensityField>(ivec3(x, y, z)) {
+        if let Some(value) = self.neighbors.sample_for::<DefaultIsoField>(ivec3(x, y, z)) {
             return value;
         }
 
         // Fallback: clamp to nearest in-bounds voxel
-        let size = DensityField::SIZE.as_ivec3();
+        let size = DefaultIsoField::SIZE.as_ivec3();
         let clamped_x = x.clamp(0, size.x - 1) as u32;
         let clamped_y = y.clamp(0, size.y - 1) as u32;
         let clamped_z = z.clamp(0, size.z - 1) as u32;
@@ -121,12 +121,12 @@ impl<'a> FieldSampler<'a> {
 /// }
 /// ```
 pub fn generate_mesh_cpu(
-    field: &DensityField,
+    field: &DefaultIsoField,
     neighbors: &NeighborDensityFields,
     mesh_size: Vec3,
 ) -> Option<Mesh> {
     let sampler = FieldSampler::new(field, neighbors);
-    let field_size = DensityField::SIZE;
+    let field_size = DefaultIsoField::SIZE;
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();

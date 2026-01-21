@@ -19,6 +19,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SurfaceNetsPlugin)
+        //may want put this in the field type
         .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
         .add_systems(Startup, setup)
         .add_systems(Update, (fly_camera, toggle_cursor))
@@ -50,7 +51,7 @@ fn setup(
     cmr: Res<DefaultChunkManager>,
 ) {
     // Create a hollow sphere by subtracting a smaller sphere from a larger one
-    let mut field = DensityField::new();
+    let mut field = DefaultIsoField::new();
     let center = vec3(16.0, 16.0, 16.0);
     let outer_radius = 15.0;
     let inner_radius = 12.0;

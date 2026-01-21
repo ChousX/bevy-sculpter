@@ -105,7 +105,7 @@ fn setup(
     for x in -1..=1 {
         for y in -1..=1 {
             for z in -1..=1 {
-                let mut field = DensityField::new();
+                let mut field = DefaultIsoField::new();
                 let local_center = vec3(16.0, 16.0, 16.0);
                 let global_offset = vec3(x as f32, y as f32, z as f32) * 32.0;
                 let sphere_center = vec3(0.0, 0.0, 0.0);
@@ -236,7 +236,7 @@ fn sculpt_terrain(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     window_q: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<FlyCam>>,
-    mut chunks: Query<(&ChunkPos, &mut DensityField)>,
+    mut chunks: Query<(&ChunkPos, &mut DefaultIsoField)>,
     mesh_size: Res<DensityFieldMeshSize>,
     brush: Res<SculptBrush>,
     mut commands: Commands,
@@ -346,7 +346,7 @@ fn sculpt_terrain(
 }
 
 fn raycast_terrain(
-    chunks: &Query<(&ChunkPos, &mut DensityField)>,
+    chunks: &Query<(&ChunkPos, &mut DefaultIsoField)>,
     mesh_size: &DensityFieldMeshSize,
     ray: Ray3d,
 ) -> Option<Vec3> {
@@ -390,7 +390,7 @@ fn raycast_terrain(
 fn update_brush_preview(
     window_q: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<FlyCam>>,
-    chunks: Query<(&ChunkPos, &mut DensityField)>,
+    chunks: Query<(&ChunkPos, &mut DefaultIsoField)>,
     mesh_size: Res<DensityFieldMeshSize>,
     brush: Res<SculptBrush>,
     mut preview_q: Query<(&mut Transform, &MeshMaterial3d<StandardMaterial>), With<BrushPreview>>,
