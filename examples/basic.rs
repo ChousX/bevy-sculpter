@@ -38,7 +38,7 @@ fn setup(mut commands: Commands, cmr: Res<DefaultChunkManager>) {
     for x in -1..=1 {
         for y in -1..=1 {
             for z in -1..=1 {
-                let mut field = DefaultIsoField::new();
+                let mut field = DefaultIsoField::default();
 
                 // Create a sphere that spans multiple chunks
                 let local_center = vec3(16.0, 16.0, 16.0);

@@ -25,9 +25,7 @@ use bevy::{
     prelude::*,
 };
 
-use crate::{
-    density_field::DefaultIsoField, field::Field, neighbor::NeighborDensityFields,
-};
+use crate::{density_field::DefaultIsoField, field::Field, neighbor::NeighborDensityFields};
 pub const NULL_VERTEX: u32 = u32::MAX;
 
 /// World-space size of the mesh generated from a density field.
@@ -273,7 +271,6 @@ pub fn generate_mesh_cpu(
     let ext_stride_x = 1usize;
     let ext_stride_y = extended_size.x as usize;
     let ext_stride_z = (extended_size.x * extended_size.y) as usize;
-const NULL_VERTEX: DefaultIsoField::
     for z in 1..=field_size.z {
         for y in 1..=field_size.y {
             for x in 1..=field_size.x {
