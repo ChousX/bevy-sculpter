@@ -28,6 +28,7 @@ use bevy::{
 use crate::{
     density_field::DefaultIsoField, field::Field, neighbor::NeighborDensityFields,
 };
+pub const NULL_VERTEX: u32 = u32::MAX;
 
 /// World-space size of the mesh generated from a density field.
 ///
