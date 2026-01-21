@@ -65,7 +65,7 @@ pub type DefaultChunkManager = ChunkManagerResource<DefaultChunkManagerResource>
 
 pub struct DefaultChunkManagerResource;
 impl ChunkManaging for DefaultChunkManagerResource {
-    const SIZE: Vec3 = vec3(10.0, 10.0, 10.0);
+    const DIMENSIONS: Vec3 = Vec3::splat(10.0);
 }
 
 /// Auto-mark chunks for mesh generation when their density field changes
