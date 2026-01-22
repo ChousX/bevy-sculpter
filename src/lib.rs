@@ -82,7 +82,7 @@ fn auto_mark_generate(
 /// Gather neighbor density slices for chunks pending mesh generation
 pub fn gather_neighbor_fields<T>(
     mut commands: Commands,
-    pending_chunks: Query<(Entity, &ChunkPositon), (With<GenerateMesh>, With<DefaultIsoField>)>,
+    pending_chunks: Query<(Entity, &ChunkPosition), (With<GenerateMesh>, With<DefaultIsoField>)>,
     all_fields: Query<&DefaultIsoField>,
     chunk_manager_resource: Res<ChunkManagerResource<T>>,
     chunk_managers: Query<&ChunkManager>,

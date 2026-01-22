@@ -49,7 +49,7 @@ fn setup(mut commands: Commands, cmr: Res<DefaultChunkManager>) {
                 bevy_sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
                 commands.spawn((
                     Chunk(cmr.entity),
-                    ChunkPositon(ivec3(x, y, z)),
+                    ChunkPosition(ivec3(x, y, z)),
                     field,
                     GenerateMesh,
                 ));

@@ -1795,7 +1795,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chunky-bevy"
 version = "0.18.0"
-source = "git+https://github.com/ChousX/chunky-bevy.git?branch=instance#4771b64a2e4dbc21c1f841b329d531436cd4e58e"
+source = "git+https://github.com/ChousX/chunky-bevy.git?branch=instance#01ccd81059b75455cbbae3ca2fe30095b0ed64cf"
 dependencies = [
  "bevy",
  "postcard",
@@ -3848,9 +3848,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.105"
+version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535d180e0ecab6268a3e718bb9fd44db66bbbc256257165fc699dadf70d16fe7"
+checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
