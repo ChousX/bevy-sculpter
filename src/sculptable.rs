@@ -1,42 +1,141 @@
-use crate::field::Field;
+//! The core trait for meshable volumetric fields.
+//!
+//! [`Sculptable`] is the primary trait for any field that can be meshed with Surface Nets.
+//! It extends [`Field`] with the ability to convert storage values to signed distance values.
+
 use bevy::prelude::*;
 
-/// Anything that can be meshed with Surface Nets.
-///
-/// Implementations convert their storage type to density values where:
-/// - Negative = inside the surface
-/// - Positive = outside the surface
-/// - Zero = exactly on the surface
-pub trait Sculptable<T: Copy + Default>: Field<T> + Component + Clone {
-    /// The default iso value for out-of-bounds sampling.
-    const DEFAULT_ISO: f32 = 1.0; // Outside by default
+use crate::field::Field;
 
-    /// Convert the storage type to a density value.
+/// A volumetric field that can be meshed with Surface Nets.
+///
+/// This trait converts the underlying storage type `T` to signed distance values where:
+/// - Negative = inside the surface
+/// - Positive = outside the surface  
+/// - Zero = exactly on the surface
+///
+/// # Type Parameters
+/// * `T` - The storage type (e.g., `f32` for raw SDF, `u8` for binary/material IDs)
+///
+/// # Example: Raw SDF Field
+/// ```ignore
+/// impl Sculptable<f32> for MySdfField {
+///     fn to_iso(value: f32) -> f32 {
+///         value // Identity - already an SDF
+///     }
+/// }
+/// ```
+///
+/// # Example: Binary Field  
+/// ```ignore
+/// impl Sculptable<u8> for BinaryField {
+///     fn to_iso(value: u8) -> f32 {
+///         if value > 0 { -1.0 } else { 1.0 } // Inside/outside
+///     }
+/// }
+/// ```
+pub trait Sculptable<T>: Field<T> + Component
+where
+    T: Copy + Clone + Default + Send + Sync + 'static,
+{
+    /// The default iso value for out-of-bounds sampling.
+    ///
+    /// Defaults to `1.0` (outside/air), meaning out-of-bounds areas
+    /// won't generate surfaces.
+    const DEFAULT_ISO: f32 = 1.0;
+
+    /// Convert the storage type to a signed distance value.
+    ///
+    /// This is the core conversion that determines surface boundaries:
+    /// - Return negative values for "inside" the surface
+    /// - Return positive values for "outside" the surface
+    /// - The zero-crossing defines the surface
     fn to_iso(value: T) -> f32;
 
-    /// Sample ISO-Value at grid coordinates.
+    /// Sample and convert to iso at unsigned grid coordinates.
     #[inline]
-    fn sample(&self, x: u32, y: u32, z: u32) -> f32 {
+    fn sample_iso(&self, x: u32, y: u32, z: u32) -> f32 {
         Self::to_iso(self.get(x, y, z))
     }
 
-    /// Sample with signed coordinates, returns default if out of bounds.
+    /// Sample and convert to iso at UVec3 coordinates.
     #[inline]
-    fn sample_signed(&self, x: i32, y: i32, z: i32) -> f32 {
-        self.get_signed(x, y, z)
-            .map(Self::to_iso)
-            .unwrap_or(Self::DEFAULT_ISO)
+    fn sample_iso_uvec3(&self, pos: UVec3) -> f32 {
+        Self::to_iso(self.get_uvec3(pos))
     }
 
-    /// Sample at IVec3 position.
+    /// Sample and convert to iso at signed coordinates.
     #[inline]
-    fn sample_ivec3(&self, pos: IVec3) -> f32 {
-        self.sample_signed(pos.x, pos.y, pos.z)
+    fn sample_iso_signed(&self, x: i32, y: i32, z: i32) -> Option<f32> {
+        self.get_signed(x, y, z).map(Self::to_iso)
     }
 
-    /// Try to sample at IVec3 position, returning None if out of bounds.
+    /// Sample and convert to iso at IVec3 coordinates.
     #[inline]
-    fn try_sample_ivec3(&self, pos: IVec3) -> Option<f32> {
-        self.get_ivec3(pos).map(Self::to_iso)
+    fn sample_iso_ivec3(&self, pos: IVec3) -> Option<f32> {
+        self.sample_iso_signed(pos.x, pos.y, pos.z)
+    }
+
+    /// Check if a voxel is inside the surface (iso < 0).
+    #[inline]
+    fn is_inside(&self, x: u32, y: u32, z: u32) -> bool {
+        self.sample_iso(x, y, z) < 0.0
+    }
+
+    /// Check if a voxel is outside the surface (iso > 0).
+    #[inline]
+    fn is_outside(&self, x: u32, y: u32, z: u32) -> bool {
+        self.sample_iso(x, y, z) > 0.0
+    }
+
+    /// Check if a voxel is near the surface (|iso| < threshold).
+    #[inline]
+    fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool {
+        self.sample_iso(x, y, z).abs() < threshold
     }
 }
+
+/// Extension trait for fields that store raw f32 SDF values.
+///
+/// Provides additional SDF-specific operations like gradient computation.
+pub trait SdfField: Sculptable<f32> {
+    /// Compute the gradient (normal direction) at a point using central differences.
+    ///
+    /// Returns a normalized vector pointing away from the surface.
+    fn gradient(&self, pos: IVec3) -> Vec3 {
+        let dx = self
+            .sample_iso_signed(pos.x + 1, pos.y, pos.z)
+            .unwrap_or(Self::DEFAULT_ISO)
+            - self
+                .sample_iso_signed(pos.x - 1, pos.y, pos.z)
+                .unwrap_or(Self::DEFAULT_ISO);
+        let dy = self
+            .sample_iso_signed(pos.x, pos.y + 1, pos.z)
+            .unwrap_or(Self::DEFAULT_ISO)
+            - self
+                .sample_iso_signed(pos.x, pos.y - 1, pos.z)
+                .unwrap_or(Self::DEFAULT_ISO);
+        let dz = self
+            .sample_iso_signed(pos.x, pos.y, pos.z + 1)
+            .unwrap_or(Self::DEFAULT_ISO)
+            - self
+                .sample_iso_signed(pos.x, pos.y, pos.z - 1)
+                .unwrap_or(Self::DEFAULT_ISO);
+
+        let grad = vec3(dx, dy, dz);
+        if grad.length_squared() > 0.0001 {
+            grad.normalize()
+        } else {
+            Vec3::Y
+        }
+    }
+
+    /// Compute the gradient at floating-point coordinates using trilinear interpolation.
+    fn gradient_interpolated(&self, pos: Vec3) -> Vec3 {
+        // Use integer position for now - could add true interpolation later
+        self.gradient(pos.as_ivec3())
+    }
+}
+
+// Blanket implementation: any Sculptable<f32> is an SdfField
+impl<F: Sculptable<f32>> SdfField for F {}

@@ -7,7 +7,10 @@ use bevy::{
     prelude::*,
 };
 
-use crate::{neighbor::NeighborFields, sculptable::Sculptable};
+use crate::{
+    neighbor::NeighborFields,
+    sculptable::Sculptable,
+};
 
 pub const NULL_VERTEX: u32 = u32::MAX;
 
@@ -28,9 +31,7 @@ struct FieldSampler<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sc
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sculptable<T>>
-    FieldSampler<'a, T, F>
-{
+impl<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sculptable<T>> FieldSampler<'a, T, F> {
     fn new(field: &'a F, neighbors: &'a NeighborFields<T>) -> Self {
         Self {
             field,
@@ -39,17 +40,17 @@ impl<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sculptable<T>>
         }
     }
 
-    /// Sample density at signed coordinates, checking neighbors if out of bounds.
+    /// Sample iso value at signed coordinates, checking neighbors if out of bounds.
     #[inline]
-    fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
+    fn sample_iso(&self, x: i32, y: i32, z: i32) -> f32 {
         // Try local field first
-        if let Some(value) = self.field.try_sample_ivec3(ivec3(x, y, z)) {
-            return value;
+        if let Some(iso) = self.field.sample_iso_ivec3(ivec3(x, y, z)) {
+            return iso;
         }
 
-        // Try neighbors - convert raw storage to iso value
-        if let Some(value) = self.neighbors.sample_for::<F>(ivec3(x, y, z)) {
-            return F::to_iso(value);
+        // Try neighbors - get raw T and convert to iso
+        if let Some(raw) = self.neighbors.sample_for::<F>(ivec3(x, y, z)) {
+            return F::to_iso(raw);
         }
 
         // Fallback: clamp to nearest in-bounds voxel
@@ -59,13 +60,12 @@ impl<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sculptable<T>>
             y.clamp(0, size.y - 1),
             z.clamp(0, size.z - 1),
         );
-        self.field
-            .sample(clamped.x as u32, clamped.y as u32, clamped.z as u32)
+        self.field.sample_iso(clamped.x as u32, clamped.y as u32, clamped.z as u32)
     }
 
     #[inline]
-    fn sample_ivec3(&self, pos: IVec3) -> f32 {
-        self.sample(pos.x, pos.y, pos.z)
+    fn sample_iso_ivec3(&self, pos: IVec3) -> f32 {
+        self.sample_iso(pos.x, pos.y, pos.z)
     }
 }
 
@@ -94,16 +94,11 @@ const CORNER_VECS: [Vec3; 8] = [
 
 // 12 edges of a cube, each connecting two corners
 const EDGES: [[usize; 2]; 12] = [
-    [0, 1],
-    [0, 2],
-    [0, 4],
-    [1, 3],
-    [1, 5],
-    [2, 3],
-    [2, 6],
+    [0, 1], [0, 2], [0, 4],
+    [1, 3], [1, 5],
+    [2, 3], [2, 6],
     [3, 7],
-    [4, 5],
-    [4, 6],
+    [4, 5], [4, 6],
     [5, 7],
     [6, 7],
 ];
@@ -158,7 +153,7 @@ where
                 let mut num_negative = 0;
 
                 for (i, offset) in CORNERS.iter().enumerate() {
-                    corner_dists[i] = sampler.sample_ivec3(voxel + *offset);
+                    corner_dists[i] = sampler.sample_iso_ivec3(voxel + *offset);
                     if corner_dists[i] < 0.0 {
                         num_negative += 1;
                     }
@@ -198,12 +193,12 @@ where
                 let world_pos = grid_to_world(grid_pos);
 
                 // Normal via central differences
-                let dx = sampler.sample(voxel.x + 1, voxel.y, voxel.z)
-                    - sampler.sample(voxel.x - 1, voxel.y, voxel.z);
-                let dy = sampler.sample(voxel.x, voxel.y + 1, voxel.z)
-                    - sampler.sample(voxel.x, voxel.y - 1, voxel.z);
-                let dz = sampler.sample(voxel.x, voxel.y, voxel.z + 1)
-                    - sampler.sample(voxel.x, voxel.y, voxel.z - 1);
+                let dx = sampler.sample_iso(voxel.x + 1, voxel.y, voxel.z)
+                    - sampler.sample_iso(voxel.x - 1, voxel.y, voxel.z);
+                let dy = sampler.sample_iso(voxel.x, voxel.y + 1, voxel.z)
+                    - sampler.sample_iso(voxel.x, voxel.y - 1, voxel.z);
+                let dz = sampler.sample_iso(voxel.x, voxel.y, voxel.z + 1)
+                    - sampler.sample_iso(voxel.x, voxel.y, voxel.z - 1);
 
                 let gradient = vec3(dx, dy, dz);
                 let normal = if gradient.length_squared() > 0.0001 {
@@ -240,10 +235,10 @@ where
 
                 let voxel = ivec3(x as i32, y as i32, z as i32);
 
-                let d0 = sampler.sample_ivec3(voxel);
-                let dx = sampler.sample_ivec3(voxel + IVec3::X);
-                let dy = sampler.sample_ivec3(voxel + IVec3::Y);
-                let dz = sampler.sample_ivec3(voxel + IVec3::Z);
+                let d0 = sampler.sample_iso_ivec3(voxel);
+                let dx = sampler.sample_iso_ivec3(voxel + IVec3::X);
+                let dy = sampler.sample_iso_ivec3(voxel + IVec3::Y);
+                let dz = sampler.sample_iso_ivec3(voxel + IVec3::Z);
 
                 // X-axis edge
                 if (d0 < 0.0) != (dx < 0.0) {

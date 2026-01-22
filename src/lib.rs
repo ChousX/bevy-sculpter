@@ -1,4 +1,4 @@
-use crate::prelude::Sculptable;
+use crate::sculptable::Sculptable;
 pub use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
@@ -35,15 +35,11 @@ impl Plugin for SurfaceNetsPlugin {
         app.add_plugins(ChunkyPlugin)
             .init_resource::<DensityFieldMeshSize>();
 
-        // Register the default field type
+        // Register the default f32 density field
         app.register_sculpter_instance::<DefaultChunkManagerResource>()
-            .register_sculptable_field::<DefaultIsoField, DefaultChunkManagerResource>();
+            .register_sculptable_field::<f32, DefaultIsoField, DefaultChunkManagerResource>();
     }
 }
-
-// =============================================================================
-// Chunk Manager Registration
-// =============================================================================
 
 pub trait RegisterSufaceNetsChunkManager {
     fn register_sculpter_instance<T: ChunkManaging>(&mut self) -> &mut Self;
@@ -56,27 +52,36 @@ impl RegisterSufaceNetsChunkManager for App {
     }
 }
 
-// =============================================================================
-// Sculptable Field Registration
-// =============================================================================
-
 /// Register a sculptable field type for automatic meshing.
 ///
-/// This sets up the systems needed for:
+/// # Type Parameters
+/// * `T` - The storage type (e.g., `f32`, `u8`)
+/// * `F` - The field type implementing `Sculptable<T>`
+/// * `CM` - The chunk manager type
+///
+/// This sets up systems for:
 /// - Auto-marking changed fields for remeshing (if `auto-mesh` feature enabled)
 /// - Gathering neighbor data for seamless boundaries
 /// - Generating meshes from the field
+///
+/// # Example
+/// ```ignore
+/// // Register a custom u8 binary field
+/// app.register_sculptable_field::<u8, BinaryField, MyChunkManager>();
+/// ```
 pub trait RegisterSculptableField {
-    fn register_sculptable_field<F, CM>(&mut self) -> &mut Self
+    fn register_sculptable_field<T, F, CM>(&mut self) -> &mut Self
     where
-        F: Sculptable<f32>,
+        T: Copy + Clone + Default + Send + Sync + 'static,
+        F: Sculptable<T> + Component + Clone,
         CM: ChunkManaging;
 }
 
 impl RegisterSculptableField for App {
-    fn register_sculptable_field<F, CM>(&mut self) -> &mut Self
+    fn register_sculptable_field<T, F, CM>(&mut self) -> &mut Self
     where
-        F: sculptable::Sculptable<f32>,
+        T: Copy + Clone + Default + Send + Sync + 'static,
+        F: Sculptable<T> + Component + Clone,
         CM: ChunkManaging,
     {
         #[cfg(feature = "auto-mesh")]
@@ -84,15 +89,13 @@ impl RegisterSculptableField for App {
 
         self.add_systems(
             PreUpdate,
-            gather_neighbor_fields::<F, CM>.run_if(resource_exists::<ChunkManagerResource<CM>>),
+            gather_neighbor_fields::<T, F, CM>.run_if(resource_exists::<ChunkManagerResource<CM>>),
         )
-        .add_systems(Update, process_chunks::<F>);
+        .add_systems(Update, process_chunks::<T, F>);
 
         self
     }
 }
-
-// Default Chunk Manager
 
 pub type DefaultChunkManager = ChunkManagerResource<DefaultChunkManagerResource>;
 
@@ -114,22 +117,26 @@ fn auto_mark_generate<F: Component>(
 }
 
 /// Gather neighbor slices for chunks pending mesh generation.
-pub fn gather_neighbor_fields<F, CM>(
+///
+/// Generic over storage type `T` and field type `F: Sculptable<T>`.
+pub fn gather_neighbor_fields<T, F, CM>(
     mut commands: Commands,
     pending_chunks: Query<(Entity, &ChunkPosition), (With<GenerateMesh>, With<F>)>,
     all_fields: Query<&F>,
     chunk_manager_resource: Res<ChunkManagerResource<CM>>,
     chunk_managers: Query<&ChunkManager>,
 ) where
-    F: field::Field<f32> + Component,
-    CM: ChunkManaging + Send + Sync + 'static,
+    T: Copy + Clone + Default + Send + Sync + 'static,
+    F: Sculptable<T>,
+    CM: ChunkManaging,
 {
     let Ok(chunk_manager) = chunk_managers.get(chunk_manager_resource.entity) else {
         return;
     };
 
     for (entity, chunk_pos) in pending_chunks.iter() {
-        let neighbors = neighbor::NeighborFields::gather(|face| {
+        // Gather raw T values from neighbors - conversion to iso happens in mesher
+        let neighbors = neighbor::NeighborFields::<T>::gather(|face| {
             let neighbor_pos = chunk_pos.0 + face.offset();
             chunk_manager
                 .get_chunk(&neighbor_pos)
@@ -141,15 +148,18 @@ pub fn gather_neighbor_fields<F, CM>(
 }
 
 /// Process chunks pending mesh generation.
-pub fn process_chunks<F>(
+///
+/// Generic over storage type `T` and field type `F: Sculptable<T>`.
+pub fn process_chunks<T, F>(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    pending_chunks: Query<(Entity, &F, Option<&neighbor::NeighborFields<f32>>), With<GenerateMesh>>,
+    pending_chunks: Query<(Entity, &F, Option<&neighbor::NeighborFields<T>>), With<GenerateMesh>>,
     mesh_size: Res<DensityFieldMeshSize>,
     existing_meshes: Query<&Mesh3d>,
 ) where
-    F: sculptable::Sculptable<f32> + Component,
+    T: Copy + Clone + Default + Send + Sync + 'static,
+    F: Sculptable<T>,
 {
     for (entity, field, neighbors) in pending_chunks.iter() {
         let neighbors = neighbors.cloned().unwrap_or_default();
