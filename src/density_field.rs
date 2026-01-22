@@ -1,18 +1,34 @@
 //! Density field storage and operations for SDF-based volumetric data.
 //!
-//! The [`DensityField`] component stores signed distance field (SDF) values on a 3D grid.
+//! The [`DefaultIsoField`] component stores signed distance field (SDF) values on a 3D grid.
 //! Negative values represent the interior of a shape, positive values the exterior,
 //! and the zero-crossing defines the surface.
 
 use crate::{field::Field, sculptable::Sculptable};
 use bevy::prelude::*;
 
+/// Default 32³ density field for SDF-based voxel sculpting.
+///
+/// This is the standard field type used by the plugin. For custom sizes
+/// or storage types, implement [`Field`] and [`Sculptable`] on your own type.
 #[derive(Component, Clone, Deref, DerefMut, Debug)]
 pub struct DefaultIsoField(pub Vec<f32>);
 
+impl DefaultIsoField {
+    /// Creates a new field filled with exterior values (all positive/outside).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a field filled with a specific value.
+    pub fn filled(value: f32) -> Self {
+        Self(vec![value; Self::VOLUME])
+    }
+}
+
 impl Default for DefaultIsoField {
     fn default() -> Self {
-        Self(vec![1.0; Self::VOLUME]) // All outside
+        Self(vec![1.0; Self::VOLUME])
     }
 }
 
@@ -33,7 +49,7 @@ impl Field<f32> for DefaultIsoField {
 
 impl Sculptable<f32> for DefaultIsoField {
     fn to_iso(value: f32) -> f32 {
-        value
+        value // Identity for raw SDF fields
     }
 }
 
