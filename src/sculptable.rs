@@ -7,7 +7,7 @@ use bevy::prelude::*;
 /// - Negative = inside the surface
 /// - Positive = outside the surface
 /// - Zero = exactly on the surface
-pub trait Sculptable<T: Copy + Default>: Field<T> + Component {
+pub trait Sculptable<T: Copy + Default>: Field<T> + Component + Clone {
     /// The default iso value for out-of-bounds sampling.
     const DEFAULT_ISO: f32 = 1.0; // Outside by default
 

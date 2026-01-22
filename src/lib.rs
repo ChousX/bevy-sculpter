@@ -1,3 +1,4 @@
+use crate::prelude::Sculptable;
 pub use crate::{
     mesher::DensityFieldMeshSize,
     neighbor::{NeighborFace, NeighborSlice},
@@ -45,14 +46,11 @@ impl Plugin for SurfaceNetsPlugin {
 // =============================================================================
 
 pub trait RegisterSufaceNetsChunkManager {
-    fn register_sculpter_instance<T: ChunkManaging + Send + Sync + 'static>(&mut self)
-    -> &mut Self;
+    fn register_sculpter_instance<T: ChunkManaging>(&mut self) -> &mut Self;
 }
 
 impl RegisterSufaceNetsChunkManager for App {
-    fn register_sculpter_instance<T: ChunkManaging + Send + Sync + 'static>(
-        &mut self,
-    ) -> &mut Self {
+    fn register_sculpter_instance<T: ChunkManaging>(&mut self) -> &mut Self {
         self.init_resource::<ChunkManagerResource<T>>();
         self
     }
@@ -71,15 +69,15 @@ impl RegisterSufaceNetsChunkManager for App {
 pub trait RegisterSculptableField {
     fn register_sculptable_field<F, CM>(&mut self) -> &mut Self
     where
-        F: sculptable::Sculptable<f32> + Component + Clone,
-        CM: ChunkManaging + Send + Sync + 'static;
+        F: Sculptable<f32>,
+        CM: ChunkManaging;
 }
 
 impl RegisterSculptableField for App {
     fn register_sculptable_field<F, CM>(&mut self) -> &mut Self
     where
-        F: sculptable::Sculptable<f32> + Component + Clone,
-        CM: ChunkManaging + Send + Sync + 'static,
+        F: sculptable::Sculptable<f32>,
+        CM: ChunkManaging,
     {
         #[cfg(feature = "auto-mesh")]
         self.add_systems(Update, auto_mark_generate::<F>);
@@ -94,9 +92,7 @@ impl RegisterSculptableField for App {
     }
 }
 
-// =============================================================================
 // Default Chunk Manager
-// =============================================================================
 
 pub type DefaultChunkManager = ChunkManagerResource<DefaultChunkManagerResource>;
 
@@ -105,10 +101,6 @@ pub struct DefaultChunkManagerResource;
 impl ChunkManaging for DefaultChunkManagerResource {
     const DIMENSIONS: Vec3 = Vec3::splat(10.0);
 }
-
-// =============================================================================
-// Generic Systems
-// =============================================================================
 
 /// Auto-mark chunks for mesh generation when their field changes.
 #[cfg(feature = "auto-mesh")]
@@ -122,7 +114,7 @@ fn auto_mark_generate<F: Component>(
 }
 
 /// Gather neighbor slices for chunks pending mesh generation.
-fn gather_neighbor_fields<F, CM>(
+pub fn gather_neighbor_fields<F, CM>(
     mut commands: Commands,
     pending_chunks: Query<(Entity, &ChunkPosition), (With<GenerateMesh>, With<F>)>,
     all_fields: Query<&F>,
@@ -149,7 +141,7 @@ fn gather_neighbor_fields<F, CM>(
 }
 
 /// Process chunks pending mesh generation.
-fn process_chunks<F>(
+pub fn process_chunks<F>(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
