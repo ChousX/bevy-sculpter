@@ -4,7 +4,7 @@
 //! Negative values represent the interior of a shape, positive values the exterior,
 //! and the zero-crossing defines the surface.
 
-use crate::field::Field;
+use crate::{field::Field, sculptable::Sculptable};
 use bevy::prelude::*;
 
 #[derive(Component, Clone, Deref, DerefMut, Debug)]
@@ -31,39 +31,9 @@ impl Field<f32> for DefaultIsoField {
     }
 }
 
-pub trait IsoField {
-    /// Creates a new density field with all voxels set to exterior (1.0).
-    // =========================================================================
-    // SDF-specific operations (not part of generic Field trait)
-    // =========================================================================
-
-    /// Checks if a voxel is inside the surface (negative density).
-    #[inline]
-    fn is_inside(&self, x: u32, y: u32, z: u32) -> bool;
-
-    /// Checks if a voxel is outside the surface (positive density).
-    #[inline]
-    fn is_outside(&self, x: u32, y: u32, z: u32) -> bool;
-
-    /// Checks if a voxel is on the surface (near zero density).
-    #[inline]
-    fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool;
-}
-
-impl IsoField for DefaultIsoField {
-    #[inline]
-    fn is_inside(&self, x: u32, y: u32, z: u32) -> bool {
-        self.get(x, y, z) < 0.0
-    }
-
-    #[inline]
-    fn is_outside(&self, x: u32, y: u32, z: u32) -> bool {
-        self.get(x, y, z) > 0.0
-    }
-
-    #[inline]
-    fn is_surface(&self, x: u32, y: u32, z: u32, threshold: f32) -> bool {
-        self.get(x, y, z).abs() <= threshold
+impl Sculptable<f32> for DefaultIsoField {
+    fn to_iso(value: f32) -> f32 {
+        value
     }
 }
 

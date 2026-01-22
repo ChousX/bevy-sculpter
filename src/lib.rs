@@ -15,13 +15,14 @@ pub mod helpers;
 pub mod mesher;
 /// Neighbor chunk data for seamless boundaries.
 pub mod neighbor;
+pub mod sculptable;
 
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
     pub use crate::{
         DefaultChunkManager,
         SurfaceNetsPlugin,
-        density_field::{DefaultIsoField, GenerateMesh, IsoField},
+        density_field::{DefaultIsoField, GenerateMesh},
         field::Field,
         mesher::DensityFieldMeshSize,
         // Export generic neighbor types for reuse
@@ -29,6 +30,7 @@ pub mod prelude {
             DensitySlice, NEIGHBOR_DEPTH, NeighborDensityFields, NeighborFace, NeighborFields,
             NeighborSlice,
         },
+        sculptable::Sculptable,
     };
 }
 

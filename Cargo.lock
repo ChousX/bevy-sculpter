@@ -1795,7 +1795,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chunky-bevy"
 version = "0.18.0"
-source = "git+https://github.com/ChousX/chunky-bevy.git?branch=instance#01ccd81059b75455cbbae3ca2fe30095b0ed64cf"
+source = "git+https://github.com/ChousX/chunky-bevy.git?branch=instance#a86d49211d579e879bc00091ebc46572f1822cf4"
 dependencies = [
  "bevy",
  "postcard",
