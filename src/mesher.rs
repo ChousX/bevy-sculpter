@@ -54,13 +54,14 @@ impl<'a, T: Copy + Clone + Default + Send + Sync + 'static, F: Sculptable<T>> Fi
         }
 
         // Fallback: clamp to nearest in-bounds voxel
-        let size = F::SIZE.as_ivec3();
-        let clamped = ivec3(
-            x.clamp(0, size.x - 1),
-            y.clamp(0, size.y - 1),
-            z.clamp(0, size.z - 1),
-        );
-        self.field.sample_iso(clamped.x as u32, clamped.y as u32, clamped.z as u32)
+        //let size = F::SIZE.as_ivec3();
+        //let clamped = ivec3(
+            //x.clamp(0, size.x - 1),
+            //y.clamp(0, size.y - 1),
+            //z.clamp(0, size.z - 1),
+        //);
+        //self.field.sample_iso(clamped.x as u32, clamped.y as u32, clamped.z as u32)
+        F::DEFAULT_ISO
     }
 
     #[inline]
