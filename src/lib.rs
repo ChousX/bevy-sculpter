@@ -16,7 +16,7 @@ pub mod sculptable;
 
 pub mod prelude {
     pub use crate::{
-        DefaultChunkManager, RegisterSculptableField, SurfaceNetsPlugin,
+        DefaultChunkManager, RegisterSculptableField, SculptingSet, SurfaceNetsPlugin,
         density_field::{DefaultIsoField, GenerateMesh},
         field::Field,
         mesher::DensityFieldMeshSize,
@@ -27,6 +27,23 @@ pub mod prelude {
         sculptable::Sculptable,
     };
 }
+/// System sets for controlling mesh generation ordering.
+/// 
+/// Use these to ensure your chunk generation systems run before meshing:
+/// ```ignore
+/// app.add_systems(PostUpdate, 
+///     my_chunk_generation.before(SculptingSet::GatherNeighbors)
+/// );
+/// ```
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SculptingSet {
+    /// Gather neighbor data for chunks pending mesh generation.
+    /// Runs after chunk data should be fully populated.
+    GatherNeighbors,
+    /// Generate meshes from density fields.
+    /// Runs after neighbor data is gathered.
+    GenerateMeshes,
+}
 
 pub struct SurfaceNetsPlugin;
 
@@ -34,6 +51,16 @@ impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ChunkyPlugin)
             .init_resource::<DensityFieldMeshSize>();
+
+        // Configure system set ordering
+        app.configure_sets(
+            PostUpdate,
+            (
+                SculptingSet::GatherNeighbors,
+                SculptingSet::GenerateMeshes,
+            )
+                .chain(),
+        );
 
         // Register the default f32 density field
         app.register_sculpter_instance::<DefaultChunkManagerResource>()
@@ -85,13 +112,18 @@ impl RegisterSculptableField for App {
         CM: ChunkManaging,
     {
         #[cfg(feature = "auto-mesh")]
-        self.add_systems(Update, auto_mark_generate::<F>);
+        self.add_systems(PostUpdate, auto_mark_generate::<F>.before(SculptingSet::GatherNeighbors));
 
         self.add_systems(
-            PreUpdate,
-            gather_neighbor_fields::<T, F, CM>.run_if(resource_exists::<ChunkManagerResource<CM>>),
-        )
-        .add_systems(Update, process_chunks::<T, F>);
+            PostUpdate,
+            (
+                gather_neighbor_fields::<T, F, CM>
+                    .in_set(SculptingSet::GatherNeighbors)
+                    .run_if(resource_exists::<ChunkManagerResource<CM>>),
+                process_chunks::<T, F>
+                    .in_set(SculptingSet::GenerateMeshes),
+            ),
+        );
 
         self
     }
