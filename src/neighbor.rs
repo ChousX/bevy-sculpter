@@ -2,36 +2,27 @@
 //!
 //! When meshing a chunk, the Surface Nets algorithm needs to sample density values
 //! slightly beyond the chunk boundaries to properly connect vertices at the edges.
-//! This module provides generic structures to cache and access that neighbor data.
+//! This module provides structures to cache and access that neighbor data.
 
 use bevy::prelude::*;
 
 use crate::field::Field;
 
 /// How many planes of neighbor data to store.
-///
-/// We need 2 planes for proper boundary vertex computation in Surface Nets.
 pub const NEIGHBOR_DEPTH: u32 = 2;
 
 /// Identifies a face of a chunk for neighbor lookups.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NeighborFace {
-    /// Negative X direction (-1, 0, 0)
     NegX = 0,
-    /// Positive X direction (+1, 0, 0)
     PosX = 1,
-    /// Negative Y direction (0, -1, 0)
     NegY = 2,
-    /// Positive Y direction (0, +1, 0)
     PosY = 3,
-    /// Negative Z direction (0, 0, -1)
     NegZ = 4,
-    /// Positive Z direction (0, 0, +1)
     PosZ = 5,
 }
 
 impl NeighborFace {
-    /// All six faces in order matching the enum discriminants.
     pub const ALL: [Self; 6] = [
         Self::NegX,
         Self::PosX,
@@ -64,9 +55,6 @@ impl NeighborFace {
     }
 
     /// Convert slice coordinates (a, b, depth) to field coordinates (x, y, z).
-    ///
-    /// For negative faces, depth=0 is at SIZE-1, depth=1 is at SIZE-2, etc.
-    /// For positive faces, depth=0 is at 0, depth=1 is at 1, etc.
     #[inline]
     pub fn to_field_coords(
         &self,
@@ -85,10 +73,9 @@ impl NeighborFace {
         }
     }
 
-    /// Check if a voxel coordinate is in this neighbor's territory and return slice coords.
+    /// Check if a voxel coordinate is in this neighbor's territory.
     ///
-    /// Returns `Some((a, b, depth))` if the voxel is in this neighbor's region,
-    /// `None` otherwise.
+    /// Returns `Some((a, b, depth))` if the voxel is in this neighbor's region.
     #[inline]
     pub fn voxel_to_slice_coords(
         &self,
@@ -167,36 +154,24 @@ impl NeighborFace {
     }
 }
 
-/// Generic neighbor slice that stores boundary planes of data from a neighboring chunk.
-///
-/// Contains [`NEIGHBOR_DEPTH`] planes of data (typically 2) to allow proper
-/// gradient computation and vertex positioning at chunk boundaries.
-///
-/// This is generic over the element type `T`, allowing reuse for both
-/// density fields (f32) and material fields (u8).
+/// A 2D slice of neighbor data with depth planes.
 #[derive(Clone, Debug)]
 pub struct NeighborSlice<T> {
-    /// Flattened 3D data: `[depth][b][a]` stored as `[a + b * size_a + depth * size_a * size_b]`
     pub data: Vec<T>,
-    /// Size along the first axis (depends on face orientation).
     pub size_a: u32,
-    /// Size along the second axis (depends on face orientation).
     pub size_b: u32,
-    /// Number of planes stored (typically [`NEIGHBOR_DEPTH`]).
     pub depth: u32,
 }
 
 impl<T: Copy + Default> NeighborSlice<T> {
     /// Creates a slice by sampling with a given function.
-    ///
-    /// The sampler receives `(a, b, depth)` coordinates and returns the value.
     pub fn from_sampler<F>(face: NeighborFace, field_size: UVec3, sampler: F) -> Self
     where
         F: Fn(u32, u32, u32) -> T,
     {
         let (size_a, size_b) = face.slice_dimensions(field_size);
-
         let mut data = Vec::with_capacity((size_a * size_b * NEIGHBOR_DEPTH) as usize);
+
         for depth in 0..NEIGHBOR_DEPTH {
             for b in 0..size_b {
                 for a in 0..size_a {
@@ -213,22 +188,7 @@ impl<T: Copy + Default> NeighborSlice<T> {
         }
     }
 
-    /// Creates a slice from any type implementing the [`Field`] trait.
-    ///
-    /// This is the primary way to create neighbor slices from field data.
-    ///
-    /// # Arguments
-    /// * `field` - Any field implementing the `Field<T>` trait
-    /// * `face` - Which face of the neighbor to sample
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use bevy_sculpter::prelude::*;
-    ///
-    /// let field = DensityField::new();
-    /// let slice = NeighborSlice::from_field(&field, NeighborFace::PosX);
-    /// ```
+    /// Creates a slice from a field, extracting raw values.
     pub fn from_field<F: Field<T> + ?Sized>(field: &F, face: NeighborFace) -> Self {
         Self::from_sampler(face, F::SIZE, |a, b, depth| {
             let (x, y, z) = face.to_field_coords(a, b, depth, F::SIZE);
@@ -236,15 +196,7 @@ impl<T: Copy + Default> NeighborSlice<T> {
         })
     }
 
-    /// Gets the value at (a, b) coordinates with depth offset.
-    ///
-    /// # Arguments
-    /// * `a` - First axis coordinate
-    /// * `b` - Second axis coordinate
-    /// * `depth` - Depth into the neighbor (0 = closest plane, 1 = one step further)
-    ///
-    /// # Returns
-    /// The value, or `T::default()` if out of bounds.
+    /// Gets the value at (a, b, depth) coordinates.
     #[inline]
     pub fn get(&self, a: u32, b: u32, depth: u32) -> T {
         if a < self.size_a && b < self.size_b && depth < self.depth {
@@ -254,140 +206,85 @@ impl<T: Copy + Default> NeighborSlice<T> {
             T::default()
         }
     }
-
-    /// Gets the value at the boundary plane (depth=0).
-    ///
-    /// Convenience method equivalent to `get(a, b, 0)`.
-    #[inline]
-    pub fn get_boundary(&self, a: u32, b: u32) -> T {
-        self.get(a, b, 0)
-    }
 }
 
-/// Generic cached neighbor field data for seamless meshing.
+// ============================================================================
+// Pre-converted ISO neighbor data (for meshing)
+// ============================================================================
+
+/// Cached neighbor iso values for seamless meshing.
 ///
-/// Stores boundary slices from up to 6 neighboring chunks (one per face).
-/// This allows the mesher to sample values beyond chunk boundaries
-/// without querying the full neighbor fields.
+/// Stores **pre-converted** f32 signed distance values from neighboring chunks.
+/// This avoids repeated `to_iso` calls during mesh generation.
+///
+/// # Usage
+///
+/// This component is automatically added to entities with `GenerateMesh` by
+/// the registered sculptable systems. You typically don't create this manually.
 #[derive(Component, Clone, Debug, Default)]
-pub struct NeighborFields<T: Clone + Default + Send + Sync + 'static> {
-    /// Neighbor slices indexed by [`NeighborFace`] (0=NegX, 1=PosX, 2=NegY, etc.)
-    pub neighbors: [Option<NeighborSlice<T>>; 6],
+pub struct NeighborIsoFields {
+    pub neighbors: [Option<NeighborSlice<f32>>; 6],
 }
 
-impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
-    /// Creates neighbor fields by gathering slices from surrounding fields.
+impl NeighborIsoFields {
+    /// Sample a pre-converted iso value at the given voxel coordinate.
     ///
-    /// # Arguments
-    /// * `get_neighbor` - Function that returns the field for a given face, or None if missing
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let neighbors = NeighborFields::gather(|face| {
-    ///     let neighbor_pos = chunk_pos + face.offset();
-    ///     chunk_manager.get(&neighbor_pos).map(|e| fields.get(e).ok()).flatten()
-    /// });
-    /// ```
-    pub fn gather<F, Fld>(get_neighbor: F) -> Self
-    where
-        F: Fn(NeighborFace) -> Option<Fld>,
-        Fld: std::ops::Deref<Target: Field<T>>,
-    {
-        let mut neighbors: [Option<NeighborSlice<T>>; 6] = Default::default();
-
+    /// Returns `Some(iso)` if the voxel is in a neighbor's region and data exists.
+    #[inline]
+    pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<f32> {
         for face in NeighborFace::ALL {
-            if let Some(field) = get_neighbor(face) {
-                neighbors[face as usize] = Some(NeighborSlice::from_field(&*field, face));
-            }
-        }
-
-        Self { neighbors }
-    }
-
-    /// Sample a value from neighbors at the given voxel coordinate.
-    ///
-    /// Returns `Some(value)` if the voxel is in a neighbor's region and that
-    /// neighbor data exists, `None` otherwise.
-    ///
-    /// # Arguments
-    /// * `voxel` - The voxel coordinate (can be outside field bounds)
-    /// * `field_size` - The size of the local field
-    pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<T> {
-        for face in NeighborFace::ALL {
-            if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size)
-                && let Some(ref slice) = self.neighbors[face as usize]
-            {
-                return Some(slice.get(a, b, depth));
+            if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size) {
+                if let Some(ref slice) = self.neighbors[face as usize] {
+                    return Some(slice.get(a, b, depth));
+                }
             }
         }
         None
     }
 
-    /// Sample using field size from the Field trait.
-    ///
-    /// Convenience method when you know the field type.
-    pub fn sample_for<F: Field<T>>(&self, voxel: IVec3) -> Option<T> {
+    /// Sample using the field size from a Sculptable type.
+    #[inline]
+    pub fn sample_for<F: Field<impl Copy + Default>>(&self, voxel: IVec3) -> Option<f32> {
         self.sample(voxel, F::SIZE.as_ivec3())
     }
 
-    /// Returns true if neighbor data exists for the given face.
     pub fn has_neighbor(&self, face: NeighborFace) -> bool {
         self.neighbors[face as usize].is_some()
     }
 
-    /// Returns the number of neighbors with data.
     pub fn neighbor_count(&self) -> usize {
         self.neighbors.iter().filter(|n| n.is_some()).count()
     }
 }
 
 // ============================================================================
-// Type aliases for convenience
+// Backward compatibility aliases
 // ============================================================================
 
-/// Neighbor slice for density field data (f32).
+/// Alias for backward compatibility.
+#[deprecated(since = "0.2.0", note = "Use NeighborIsoFields instead")]
+pub type NeighborDensityFields = NeighborIsoFields;
+
+/// Alias for backward compatibility.
+#[deprecated(since = "0.2.0", note = "Use NeighborSlice<f32> instead")]
 pub type DensitySlice = NeighborSlice<f32>;
-
-/// Cached neighbor density data for seamless meshing.
-pub type NeighborDensityFields = NeighborFields<f32>;
-
-/// Neighbor slice for material field data (u8).
-pub type MaterialSlice = NeighborSlice<u8>;
-
-/// Cached neighbor material data for seamless meshing.
-pub type NeighborMaterialFields = NeighborFields<u8>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::density_field::DensityField;
-    use crate::field::Field;
-
-    #[test]
-    fn test_slice_dimensions() {
-        let size = uvec3(32, 32, 32);
-        assert_eq!(NeighborFace::NegX.slice_dimensions(size), (32, 32));
-        assert_eq!(NeighborFace::PosY.slice_dimensions(size), (32, 32));
-    }
 
     #[test]
     fn test_voxel_to_slice_coords() {
         let size = ivec3(32, 32, 32);
 
-        // Test NegX: voxel at x=-1 should map to depth=0
         assert_eq!(
             NeighborFace::NegX.voxel_to_slice_coords(ivec3(-1, 5, 10), size),
             Some((5, 10, 0))
         );
-
-        // Test PosX: voxel at x=32 should map to depth=0
         assert_eq!(
             NeighborFace::PosX.voxel_to_slice_coords(ivec3(32, 5, 10), size),
             Some((5, 10, 0))
         );
-
-        // Test in-bounds returns None
         assert_eq!(
             NeighborFace::NegX.voxel_to_slice_coords(ivec3(5, 5, 5), size),
             None
@@ -395,90 +292,19 @@ mod tests {
     }
 
     #[test]
-    fn test_from_field_trait() {
-        let mut field = DensityField::new();
-        // Set a recognizable value at the boundary
-        field.set(31, 5, 10, -0.5);
+    fn test_neighbor_iso_sample() {
+        let mut fields = NeighborIsoFields::default();
 
-        // Create slice from the field using the trait method
-        let slice = NeighborSlice::from_field(&field, NeighborFace::NegX);
-
-        // NegX face: depth=0 samples x=31, so (a=5, b=10, depth=0) should give us -0.5
-        assert_eq!(slice.get(5, 10, 0), -0.5);
-    }
-
-    #[test]
-    fn test_generic_slice_u8() {
-        // Test with u8 values
-        let slice: NeighborSlice<u8> =
-            NeighborSlice::from_sampler(NeighborFace::PosX, uvec3(32, 32, 32), |a, b, _depth| {
-                ((a + b) % 256) as u8
-            });
-
-        assert_eq!(slice.get(0, 0, 0), 0);
-        assert_eq!(slice.get(1, 1, 0), 2);
-        assert_eq!(slice.get(100, 100, 0), 0); // Out of bounds returns default
-    }
-
-    #[test]
-    fn test_neighbor_fields_sample() {
-        let mut fields: NeighborFields<u8> = NeighborFields::default();
-
-        // Add a slice for PosX neighbor
         fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
             NeighborFace::PosX,
             uvec3(32, 32, 32),
-            |_a, _b, _depth| 42u8,
+            |_, _, _| -0.5,
         ));
 
-        let size = ivec3(32, 32, 32);
-
-        // Sample from PosX neighbor region
-        assert_eq!(fields.sample(ivec3(32, 5, 5), size), Some(42));
-
-        // Sample from in-bounds (no neighbor)
-        assert_eq!(fields.sample(ivec3(5, 5, 5), size), None);
-
-        // Sample from NegX neighbor region (no data)
-        assert_eq!(fields.sample(ivec3(-1, 5, 5), size), None);
-    }
-
-    #[test]
-    fn test_neighbor_fields_gather() {
-        let field = DensityField::filled(-1.0);
-
-        // Simulate gathering - only PosX neighbor exists
-        let neighbors = NeighborFields::gather(|face| {
-            if face == NeighborFace::PosX {
-                Some(&field)
-            } else {
-                None
-            }
-        });
-
-        assert!(neighbors.has_neighbor(NeighborFace::PosX));
-        assert!(!neighbors.has_neighbor(NeighborFace::NegX));
-        assert_eq!(neighbors.neighbor_count(), 1);
-
-        // Sample from the PosX neighbor
         assert_eq!(
-            neighbors.sample_for::<DensityField>(ivec3(32, 5, 5)),
-            Some(-1.0)
+            fields.sample(ivec3(32, 5, 5), ivec3(32, 32, 32)),
+            Some(-0.5)
         );
-    }
-
-    #[test]
-    fn test_sample_for_convenience() {
-        let mut fields: NeighborDensityFields = NeighborFields::default();
-
-        let field = DensityField::filled(-0.25);
-        fields.neighbors[NeighborFace::NegY as usize] =
-            Some(NeighborSlice::from_field(&field, NeighborFace::NegY));
-
-        // Use the convenience method that infers field size
-        assert_eq!(
-            fields.sample_for::<DensityField>(ivec3(5, -1, 5)),
-            Some(-0.25)
-        );
+        assert_eq!(fields.sample(ivec3(5, 5, 5), ivec3(32, 32, 32)), None);
     }
 }

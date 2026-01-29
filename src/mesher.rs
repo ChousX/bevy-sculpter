@@ -1,38 +1,21 @@
-//! Surface Nets mesh generation from density fields.
+//! Surface Nets mesh generation from sculptable fields.
 //!
 //! This module implements the Surface Nets algorithm for generating smooth meshes
-//! from signed distance fields. Unlike Marching Cubes, Surface Nets produces
-//! vertex positions that lie on the actual isosurface, resulting in smoother meshes.
-//!
-//! # Algorithm Overview
-//!
-//! 1. For each voxel that contains a surface crossing (some corners inside, some outside):
-//!    - Find all edges that cross the isosurface
-//!    - Compute the centroid of the crossing points
-//!    - Place a vertex at that centroid
-//!
-//! 2. For each edge that crosses the isosurface:
-//!    - Connect the four adjacent voxel vertices into a quad
-//!
-//! # Seamless Chunk Boundaries
-//!
-//! The implementation extends the vertex grid by one in each positive direction,
-//! using [`NeighborDensityFields`] data to sample beyond chunk boundaries.
-//! This allows quads to be generated that span chunk boundaries.
+//! from any field implementing [`Sculptable`].
+
+use std::marker::PhantomData;
 
 use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
 
-use crate::{
-    NULL_VERTEX, density_field::DensityField, field::Field, neighbor::NeighborDensityFields,
-};
+use crate::{NULL_VERTEX, neighbor::NeighborIsoFields, sculptable::Sculptable};
 
-/// World-space size of the mesh generated from a density field.
+/// World-space size of meshes generated from sculptable fields.
 ///
-/// This resource controls the scale of generated meshes. A density field
-/// always has [`DensityField::SIZE`] voxels, but this determines how large
+/// This resource controls the scale of generated meshes. A field always has
+/// [`FIELD_SIZE`](crate::FIELD_SIZE) voxels, but this determines how large
 /// that maps to in world coordinates.
 ///
 /// # Default
@@ -44,106 +27,114 @@ use crate::{
 /// use bevy::prelude::*;
 /// use bevy_sculpter::prelude::*;
 ///
-/// // Make each chunk 20 world units on each side
-/// App::new()
-///     .insert_resource(DensityFieldMeshSize(vec3(20., 20., 20.)));
+/// // Make each chunk mesh 20 world units on each side
+/// App::new().insert_resource(MeshSize(vec3(20., 20., 20.)));
 /// ```
 #[derive(Resource, Clone, Copy, Deref, DerefMut, Debug)]
-pub struct DensityFieldMeshSize(pub Vec3);
+pub struct MeshSize(pub Vec3);
 
-impl Default for DensityFieldMeshSize {
+impl Default for MeshSize {
     fn default() -> Self {
         Self(vec3(10., 10., 10.))
     }
 }
 
-/// Sampler that reads from a field and its neighbors seamlessly.
-///
-/// This struct encapsulates the logic for sampling density values both
-/// within the local field and from neighboring chunks.
-struct FieldSampler<'a> {
-    field: &'a DensityField,
-    neighbors: &'a NeighborDensityFields,
+/// Backward compatibility alias.
+#[deprecated(since = "0.2.0", note = "Renamed to MeshSize")]
+pub type DensityFieldMeshSize = MeshSize;
+
+/// Sampler that reads iso values from a Sculptable field and pre-converted neighbors.
+struct IsoSampler<'a, F, T>
+where
+    F: Sculptable<T>,
+    T: Copy + Default + Send + Sync + 'static,
+{
+    field: &'a F,
+    neighbors: &'a NeighborIsoFields,
+    _marker: PhantomData<T>,
 }
 
-impl<'a> FieldSampler<'a> {
-    fn new(field: &'a DensityField, neighbors: &'a NeighborDensityFields) -> Self {
-        Self { field, neighbors }
+impl<'a, F, T> IsoSampler<'a, F, T>
+where
+    F: Sculptable<T>,
+    T: Copy + Default + Send + Sync + 'static,
+{
+    fn new(field: &'a F, neighbors: &'a NeighborIsoFields) -> Self {
+        Self {
+            field,
+            neighbors,
+            _marker: PhantomData,
+        }
     }
 
-    /// Sample density at signed coordinates, checking neighbors if out of bounds.
+    /// Sample iso value at signed coordinates.
+    ///
+    /// - Local field values are converted via `F::to_iso`
+    /// - Neighbor values are pre-converted
     #[inline]
     fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
-        // Try local field first
+        // Try local field first (convert to iso)
         if let Some(value) = self.field.get_signed(x, y, z) {
-            return value;
+            return F::to_iso(value);
         }
 
-        // Try neighbors
-        if let Some(value) = self.neighbors.sample_for::<DensityField>(ivec3(x, y, z)) {
-            return value;
+        // Try pre-converted neighbors
+        if let Some(iso) = self.neighbors.sample(ivec3(x, y, z), F::SIZE.as_ivec3()) {
+            return iso;
         }
 
         // Fallback: clamp to nearest in-bounds voxel
-        let size = DensityField::SIZE.as_ivec3();
-        let clamped_x = x.clamp(0, size.x - 1) as u32;
-        let clamped_y = y.clamp(0, size.y - 1) as u32;
-        let clamped_z = z.clamp(0, size.z - 1) as u32;
-        self.field.get(clamped_x, clamped_y, clamped_z)
+        let size = F::SIZE.as_ivec3();
+        let cx = x.clamp(0, size.x - 1) as u32;
+        let cy = y.clamp(0, size.y - 1) as u32;
+        let cz = z.clamp(0, size.z - 1) as u32;
+        self.field.sample_iso(cx, cy, cz)
     }
 
-    /// Sample at IVec3 position.
     #[inline]
     fn sample_ivec3(&self, pos: IVec3) -> f32 {
         self.sample(pos.x, pos.y, pos.z)
     }
 }
 
-/// Generates a mesh from a density field using the Surface Nets algorithm.
+/// Generates a mesh from a Sculptable field using the Surface Nets algorithm.
 ///
-/// This function runs entirely on the CPU and produces a Bevy [`Mesh`] with
-/// position and normal attributes.
+/// # Type Parameters
+/// * `F` - Field type implementing `Sculptable<T>`
+/// * `T` - Storage type of the field
 ///
 /// # Arguments
-/// * `field` - The density field to mesh
-/// * `neighbors` - Cached neighbor data for seamless boundaries (can be empty)
+/// * `field` - The sculptable field to mesh
+/// * `neighbors` - Pre-converted neighbor iso data for seamless boundaries
 /// * `mesh_size` - World-space dimensions of the output mesh
 ///
 /// # Returns
-/// `Some(Mesh)` if any surface was found, `None` if the field is entirely inside or outside.
-///
-/// # Example
-///
-/// ```ignore
-/// let mesh = generate_mesh_cpu(&field, &neighbors, vec3(10., 10., 10.));
-/// if let Some(mesh) = mesh {
-///     commands.spawn(Mesh3d(meshes.add(mesh)));
-/// }
-/// ```
-pub fn generate_mesh_cpu(
-    field: &DensityField,
-    neighbors: &NeighborDensityFields,
+/// `Some(Mesh)` if any surface was found, `None` if entirely inside or outside.
+pub fn generate_mesh_cpu<F, T>(
+    field: &F,
+    neighbors: &NeighborIsoFields,
     mesh_size: Vec3,
-) -> Option<Mesh> {
-    let sampler = FieldSampler::new(field, neighbors);
-    let field_size = DensityField::SIZE;
+) -> Option<Mesh>
+where
+    F: Sculptable<T>,
+    T: Copy + Default + Send + Sync + 'static,
+{
+    let sampler = IsoSampler::new(field, neighbors);
+    let field_size = F::SIZE;
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    // Extended size: we generate vertices for voxels [0, SIZE] inclusive
-    // The extra layer at SIZE uses neighbor data and allows seamless stitching
-    let extended_size = field_size + UVec3::ONE;
-    let extended_volume = (extended_size.x * extended_size.y * extended_size.z) as usize;
-    let mut vertex_lookup = vec![NULL_VERTEX; extended_volume];
+    // Extended size for boundary vertices
+    let ext_size = field_size + UVec3::ONE;
+    let ext_vol = (ext_size.x * ext_size.y * ext_size.z) as usize;
+    let mut vtx_lookup = vec![NULL_VERTEX; ext_vol];
 
-    // Index into extended lookup table
-    let ext_index = |x: u32, y: u32, z: u32| -> usize {
-        (x + y * extended_size.x + z * extended_size.x * extended_size.y) as usize
+    let ext_idx = |x: u32, y: u32, z: u32| -> usize {
+        (x + y * ext_size.x + z * ext_size.x * ext_size.y) as usize
     };
 
-    // Cube corners (offsets from voxel origin)
     const CORNERS: [IVec3; 8] = [
         IVec3::new(0, 0, 0),
         IVec3::new(1, 0, 0),
@@ -166,64 +157,59 @@ pub fn generate_mesh_cpu(
         Vec3::new(1.0, 1.0, 1.0),
     ];
 
-    // 12 edges of a cube, each connecting two corners
     const EDGES: [[usize; 2]; 12] = [
         [0, 1],
         [0, 2],
-        [0, 4], // edges from corner 0
+        [0, 4],
         [1, 3],
-        [1, 5], // edges from corner 1
+        [1, 5],
         [2, 3],
-        [2, 6], // edges from corner 2
-        [3, 7], // edge from corner 3
+        [2, 6],
+        [3, 7],
         [4, 5],
-        [4, 6], // edges from corner 4
-        [5, 7], // edge from corner 5
-        [6, 7], // edge from corner 6
+        [4, 6],
+        [5, 7],
+        [6, 7],
     ];
 
     let scale = mesh_size / field_size.as_vec3();
-    let grid_to_world = |grid_pos: Vec3| -> [f32; 3] {
-        let world = grid_pos * scale;
-        [world.x, world.y, world.z]
+    let grid_to_world = |p: Vec3| -> [f32; 3] {
+        let w = p * scale;
+        [w.x, w.y, w.z]
     };
 
-    // Pass 1: Generate vertices for each voxel that contains a surface
+    // Pass 1: Generate vertices
     for z in 0..=field_size.z {
         for y in 0..=field_size.y {
             for x in 0..=field_size.x {
                 let voxel = ivec3(x as i32, y as i32, z as i32);
 
-                // Sample the 8 corners of this voxel's cube
-                let mut corner_dists = [0.0f32; 8];
-                let mut num_negative = 0;
+                let mut corner_iso = [0.0f32; 8];
+                let mut num_neg = 0;
 
-                for (i, offset) in CORNERS.iter().enumerate() {
-                    corner_dists[i] = sampler.sample_ivec3(voxel + *offset);
-                    if corner_dists[i] < 0.0 {
-                        num_negative += 1;
+                for (i, off) in CORNERS.iter().enumerate() {
+                    corner_iso[i] = sampler.sample_ivec3(voxel + *off);
+                    if corner_iso[i] < 0.0 {
+                        num_neg += 1;
                     }
                 }
 
-                let stride = ext_index(x, y, z);
+                let stride = ext_idx(x, y, z);
 
-                // If all corners are inside or all outside, no surface here
-                if num_negative == 0 || num_negative == 8 {
-                    vertex_lookup[stride] = NULL_VERTEX;
+                if num_neg == 0 || num_neg == 8 {
+                    vtx_lookup[stride] = NULL_VERTEX;
                     continue;
                 }
 
-                // Calculate centroid of edge intersection points (Surface Nets method)
+                // Centroid of edge crossings
                 let mut sum = Vec3::ZERO;
                 let mut count = 0.0;
 
                 for edge in &EDGES {
-                    let d1 = corner_dists[edge[0]];
-                    let d2 = corner_dists[edge[1]];
+                    let d1 = corner_iso[edge[0]];
+                    let d2 = corner_iso[edge[1]];
 
-                    // Edge crosses the surface if signs differ
                     if (d1 < 0.0) != (d2 < 0.0) {
-                        // Linear interpolation to find crossing point
                         let t = d1 / (d1 - d2);
                         let c1 = CORNER_VECS[edge[0]];
                         let c2 = CORNER_VECS[edge[1]];
@@ -237,12 +223,10 @@ pub fn generate_mesh_cpu(
                 } else {
                     Vec3::splat(0.5)
                 };
-
-                // Convert to world position
                 let grid_pos = voxel.as_vec3() + centroid;
                 let world_pos = grid_to_world(grid_pos);
 
-                // Calculate normal via central differences gradient
+                // Normal via central differences
                 let dx = sampler.sample(voxel.x + 1, voxel.y, voxel.z)
                     - sampler.sample(voxel.x - 1, voxel.y, voxel.z);
                 let dy = sampler.sample(voxel.x, voxel.y + 1, voxel.z)
@@ -250,14 +234,14 @@ pub fn generate_mesh_cpu(
                 let dz = sampler.sample(voxel.x, voxel.y, voxel.z + 1)
                     - sampler.sample(voxel.x, voxel.y, voxel.z - 1);
 
-                let gradient = vec3(dx, dy, dz);
-                let normal = if gradient.length_squared() > 0.0001 {
-                    gradient.normalize()
+                let grad = vec3(dx, dy, dz);
+                let normal = if grad.length_squared() > 0.0001 {
+                    grad.normalize()
                 } else {
                     Vec3::Y
                 };
 
-                vertex_lookup[stride] = positions.len() as u32;
+                vtx_lookup[stride] = positions.len() as u32;
                 positions.push(world_pos);
                 normals.push(normal.into());
             }
@@ -268,16 +252,16 @@ pub fn generate_mesh_cpu(
         return None;
     }
 
-    // Pass 2: Generate quads between adjacent voxels that share an edge crossing
-    let ext_stride_x = 1usize;
-    let ext_stride_y = extended_size.x as usize;
-    let ext_stride_z = (extended_size.x * extended_size.y) as usize;
+    // Pass 2: Generate quads
+    let ext_sx = 1usize;
+    let ext_sy = ext_size.x as usize;
+    let ext_sz = (ext_size.x * ext_size.y) as usize;
 
     for z in 1..=field_size.z {
         for y in 1..=field_size.y {
             for x in 1..=field_size.x {
-                let stride = ext_index(x, y, z);
-                let v0 = vertex_lookup[stride];
+                let stride = ext_idx(x, y, z);
+                let v0 = vtx_lookup[stride];
 
                 if v0 == NULL_VERTEX {
                     continue;
@@ -292,9 +276,9 @@ pub fn generate_mesh_cpu(
 
                 // X-axis edge
                 if (d0 < 0.0) != (dx < 0.0) {
-                    let v1 = vertex_lookup[stride - ext_stride_y];
-                    let v2 = vertex_lookup[stride - ext_stride_z];
-                    let v3 = vertex_lookup[stride - ext_stride_y - ext_stride_z];
+                    let v1 = vtx_lookup[stride - ext_sy];
+                    let v2 = vtx_lookup[stride - ext_sz];
+                    let v3 = vtx_lookup[stride - ext_sy - ext_sz];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
                         if d0 < 0.0 {
@@ -307,9 +291,9 @@ pub fn generate_mesh_cpu(
 
                 // Y-axis edge
                 if (d0 < 0.0) != (dy < 0.0) {
-                    let v1 = vertex_lookup[stride - ext_stride_x];
-                    let v2 = vertex_lookup[stride - ext_stride_z];
-                    let v3 = vertex_lookup[stride - ext_stride_x - ext_stride_z];
+                    let v1 = vtx_lookup[stride - ext_sx];
+                    let v2 = vtx_lookup[stride - ext_sz];
+                    let v3 = vtx_lookup[stride - ext_sx - ext_sz];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
                         if d0 < 0.0 {
@@ -322,9 +306,9 @@ pub fn generate_mesh_cpu(
 
                 // Z-axis edge
                 if (d0 < 0.0) != (dz < 0.0) {
-                    let v1 = vertex_lookup[stride - ext_stride_x];
-                    let v2 = vertex_lookup[stride - ext_stride_y];
-                    let v3 = vertex_lookup[stride - ext_stride_x - ext_stride_y];
+                    let v1 = vtx_lookup[stride - ext_sx];
+                    let v2 = vtx_lookup[stride - ext_sy];
+                    let v3 = vtx_lookup[stride - ext_sx - ext_sy];
 
                     if v1 != NULL_VERTEX && v2 != NULL_VERTEX && v3 != NULL_VERTEX {
                         if d0 < 0.0 {

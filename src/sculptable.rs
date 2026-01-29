@@ -17,26 +17,28 @@ use crate::field::Field;
 /// # Type Parameters
 /// * `T` - The storage type (e.g., `f32` for raw SDF, `u8` for binary/material IDs)
 ///
-/// # Example: Raw SDF Field
+/// # Example: Raw SDF
+///
 /// ```ignore
-/// impl Sculptable<f32> for MySdfField {
+/// impl Sculptable<f32> for SdfVolume {
 ///     fn to_iso(value: f32) -> f32 {
 ///         value // Identity - already an SDF
 ///     }
 /// }
 /// ```
 ///
-/// # Example: Binary Field  
+/// # Example: Binary Voxels
+///
 /// ```ignore
-/// impl Sculptable<u8> for BinaryField {
+/// impl Sculptable<u8> for BinaryVoxelField {
 ///     fn to_iso(value: u8) -> f32 {
-///         if value > 0 { -1.0 } else { 1.0 } // Inside/outside
+///         if value > 0 { -1.0 } else { 1.0 }
 ///     }
 /// }
 /// ```
 pub trait Sculptable<T>: Field<T> + Component
 where
-    T: Copy + Clone + Default + Send + Sync + 'static,
+    T: Copy + Default + Send + Sync + 'static,
 {
     /// The default iso value for out-of-bounds sampling.
     ///
@@ -65,6 +67,8 @@ where
     }
 
     /// Sample and convert to iso at signed coordinates.
+    ///
+    /// Returns `None` if out of bounds.
     #[inline]
     fn sample_iso_signed(&self, x: i32, y: i32, z: i32) -> Option<f32> {
         self.get_signed(x, y, z).map(Self::to_iso)
@@ -95,13 +99,13 @@ where
     }
 }
 
-/// Extension trait for fields that store raw f32 SDF values.
+/// Extension trait for SDF-specific operations like gradient computation.
 ///
-/// Provides additional SDF-specific operations like gradient computation.
-pub trait SdfField: Sculptable<f32> {
+/// Automatically implemented for any `Sculptable<f32>`.
+pub trait SdfOps: Sculptable<f32> {
     /// Compute the gradient (normal direction) at a point using central differences.
     ///
-    /// Returns a normalized vector pointing away from the surface.
+    /// Returns a normalized vector pointing away from the surface (toward positive values).
     fn gradient(&self, pos: IVec3) -> Vec3 {
         let dx = self
             .sample_iso_signed(pos.x + 1, pos.y, pos.z)
@@ -130,12 +134,12 @@ pub trait SdfField: Sculptable<f32> {
         }
     }
 
-    /// Compute the gradient at floating-point coordinates using trilinear interpolation.
-    fn gradient_interpolated(&self, pos: Vec3) -> Vec3 {
-        // Use integer position for now - could add true interpolation later
+    /// Compute the gradient at UVec3 coordinates.
+    #[inline]
+    fn gradient_uvec3(&self, pos: UVec3) -> Vec3 {
         self.gradient(pos.as_ivec3())
     }
 }
 
-// Blanket implementation: any Sculptable<f32> is an SdfField
-impl<F: Sculptable<f32>> SdfField for F {}
+// Blanket implementation: any Sculptable<f32> gets SdfOps
+impl<F: Sculptable<f32>> SdfOps for F {}

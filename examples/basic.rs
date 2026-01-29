@@ -1,4 +1,11 @@
-// examples/basic.rs
+//! Basic example showing a grid of chunks with a sphere spanning multiple chunks.
+//!
+//! Controls:
+//! - Left click + drag: Rotate camera
+//! - WASD: Move horizontally
+//! - Space/Shift: Move up/down
+//! - Ctrl: Speed boost
+
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy_sculpter::prelude::*;
@@ -8,7 +15,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SurfaceNetsPlugin)
-        .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
+        .register_sculptable::<SdfVolume, f32>()
+        .insert_resource(MeshSize(vec3(10., 10., 10.)))
         .add_systems(Startup, setup)
         .add_systems(Update, fly_camera)
         .run();
@@ -33,12 +41,18 @@ impl Default for FlyCam {
     }
 }
 
-fn setup(mut commands: Commands) {
-    // Spawn a 3x3x3 grid of chunks with density fields
+fn setup(mut commands: Commands, _mesh_size: Res<MeshSize>) {
+    // Spawn a 3x3x3 grid of chunks with SDF volumes as children
     for x in -1..=1 {
         for y in -1..=1 {
             for z in -1..=1 {
-                let mut field = DensityField::new();
+                let chunk_pos = ivec3(x, y, z);
+
+                // Create the chunk parent
+                let chunk = commands.spawn((Chunk, ChunkPos(chunk_pos))).id();
+
+                // Create SDF volume for this chunk
+                let mut volume = SdfVolume::new();
 
                 // Create a sphere that spans multiple chunks
                 let local_center = vec3(16.0, 16.0, 16.0);
@@ -46,8 +60,10 @@ fn setup(mut commands: Commands) {
                 let sphere_center = vec3(0.0, 0.0, 0.0);
                 let local_sphere_center = sphere_center - global_offset + local_center;
 
-                bevy_sculpter::helpers::fill_sphere(&mut field, local_sphere_center, 20.0);
-                commands.spawn((Chunk, ChunkPos(ivec3(x, y, z)), field, GenerateMesh));
+                bevy_sculpter::helpers::fill_sphere(&mut volume, local_sphere_center, 20.0);
+
+                // Spawn volume as child of chunk
+                commands.entity(chunk).with_child((volume, GenerateMesh));
             }
         }
     }
@@ -81,7 +97,7 @@ fn fly_camera(
         return;
     };
 
-    // Mouse look (only when right mouse button is held)
+    // Mouse look (only when left mouse button is held)
     if mouse_buttons.pressed(MouseButton::Left) {
         for motion in mouse_motion.read() {
             fly_cam.yaw -= motion.delta.x * fly_cam.sensitivity;
