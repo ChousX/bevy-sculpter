@@ -69,6 +69,7 @@ pub mod prelude {
         sculptable::{Sculptable, SdfOps},
         sdf_volume::{GenerateMesh, SdfVolume},
     };
+    pub use crate::backwars_compatibility::*;
 }
 
 /// Size of the field grid per chunk (32×32×32 voxels).
@@ -309,14 +310,17 @@ impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {
 // Backward compatibility aliases
 // ============================================================================
 
-/// Alias for backward compatibility.
+mod backwars_compatibility{
 #[deprecated(since = "0.2.0", note = "Renamed to SdfVolume")]
-pub type DensityField = sdf_volume::SdfVolume;
+pub type DensityField = crate::SdfVolume;
 
-/// Alias for backward compatibility.
 #[deprecated(since = "0.2.0", note = "Renamed to FIELD_SIZE")]
-pub const DENSITY_FIELD_SIZE: UVec3 = FIELD_SIZE;
+pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
 
-/// Alias for backward compatibility.
 #[deprecated(since = "0.2.0", note = "Renamed to MeshSize")]
-pub type DensityFieldMeshSize = MeshSize;
+pub type DensityFieldMeshSize = crate::MeshSize;
+
+#[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
+pub type DensityFieldDirty = crate::GenerateMesh;
+}
+

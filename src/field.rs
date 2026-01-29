@@ -314,6 +314,7 @@ mod tests {
     use super::*;
 
     // Test implementation
+    #[derive(Default)]
     struct TestField(Vec<f32>);
 
     impl Field<f32> for TestField {

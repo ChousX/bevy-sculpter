@@ -19,7 +19,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(SurfaceNetsPlugin)
-        .insert_resource(DensityFieldMeshSize(vec3(10., 10., 10.)))
+        .register_sculptable::<SdfVolume, f32>()
+        .insert_resource(MeshSize(vec3(10., 10., 10.)))
         .add_systems(Startup, setup)
         .add_systems(Update, (fly_camera, toggle_cursor))
         .run();
@@ -57,7 +58,7 @@ fn setup(mut commands: Commands, mut windows: Query<&mut CursorOptions, With<Pri
     // Carve out inner sphere to make it hollow
     bevy_sculpter::helpers::brush_sphere(&mut field, center, inner_radius, false);
 
-    commands.spawn((Chunk, ChunkPos(ivec3(0, 0, 0)), field, DensityFieldDirty));
+    commands.spawn((Chunk, ChunkPos(ivec3(0, 0, 0)), field, GenerateMesh));
 
     // Camera starts at the center, inside the hollow sphere
     commands.spawn((
@@ -67,7 +68,7 @@ fn setup(mut commands: Commands, mut windows: Query<&mut CursorOptions, With<Pri
     ));
 
     // Ambient light to see the interior
-    commands.insert_resource(AmbientLight {
+    commands.spawn(AmbientLight {
         color: Color::WHITE,
         brightness: 800.0,
         affects_lightmapped_meshes: false,
