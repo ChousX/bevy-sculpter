@@ -73,6 +73,7 @@ pub mod helpers;
 pub mod mesher;
 /// Neighbor chunk data for seamless boundaries.
 pub mod neighbor;
+mod sculptable;
 
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {

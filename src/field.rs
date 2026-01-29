@@ -16,7 +16,7 @@ use bevy::prelude::*;
 ///
 /// # Coordinate System
 /// Uses X-Y-Z ordering where X varies fastest in the underlying storage.
-pub trait Field<T: Copy + Default> {
+pub trait Field<T: Copy + Default>: Default {
     /// The size of the field grid as a `UVec3`.
     const SIZE: UVec3;
 
