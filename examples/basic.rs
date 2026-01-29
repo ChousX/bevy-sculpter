@@ -49,7 +49,7 @@ fn setup(mut commands: Commands, _mesh_size: Res<MeshSize>) {
                 let chunk_pos = ivec3(x, y, z);
 
                 // Create the chunk parent
-                let chunk = commands.spawn((Chunk, ChunkPos(chunk_pos))).id();
+                let chunk = commands.spawn((Chunk, ChunkPosition(chunk_pos))).id();
 
                 // Create SDF volume for this chunk
                 let mut volume = SdfVolume::new();

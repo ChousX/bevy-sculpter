@@ -42,15 +42,14 @@
 
 #![warn(missing_docs)]
 
-use bevy::prelude::*;
-use chunky_bevy::ChunkyPlugin;
-pub use chunky_bevy::prelude::{Chunk, ChunkManager, ChunkPos};
-
 pub use crate::{
     mesher::MeshSize,
     neighbor::{NeighborFace, NeighborIsoFields, NeighborSlice},
     prelude::{GenerateMesh, SdfVolume},
 };
+use bevy::prelude::*;
+use chunky_bevy::ChunkyPlugin;
+pub use chunky_bevy::prelude::{Chunk, ChunkManager, ChunkPosition};
 
 pub mod field;
 pub mod helpers;
@@ -61,6 +60,7 @@ pub mod sdf_volume;
 
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
+    pub use crate::backwars_compatibility::*;
     pub use crate::{
         FIELD_SIZE, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
@@ -69,7 +69,6 @@ pub mod prelude {
         sculptable::{Sculptable, SdfOps},
         sdf_volume::{GenerateMesh, SdfVolume},
     };
-    pub use crate::backwars_compatibility::*;
 }
 
 /// Size of the field grid per chunk (32×32×32 voxels).
@@ -96,7 +95,7 @@ pub struct SurfaceNetsPlugin;
 
 impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ChunkyPlugin::default())
+        app.add_plugins(ChunkyPlugin)
             .init_resource::<MeshSize>()
             // Propagate GenerateMesh from parent chunks to all children
             .add_systems(Update, propagate_generate_mesh_to_children);
@@ -202,7 +201,7 @@ fn gather_neighbor_iso_fields<F, T>(
     // Children that need meshing (no neighbor data yet)
     pending: Query<(Entity, &ChildOf), (With<F>, With<GenerateMesh>, Without<NeighborIsoFields>)>,
     // Parent chunks with position
-    chunks: Query<&ChunkPos, With<Chunk>>,
+    chunks: Query<&ChunkPosition, With<Chunk>>,
     // All fields of this type (to find in neighbor chunks' children)
     all_fields: Query<&F>,
     // Chunk lookup
@@ -310,17 +309,20 @@ impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {
 // Backward compatibility aliases
 // ============================================================================
 
-mod backwars_compatibility{
-#[deprecated(since = "0.2.0", note = "Renamed to SdfVolume")]
-pub type DensityField = crate::SdfVolume;
+mod backwars_compatibility {
+    /// Backward compatibility aliase
+    #[deprecated(since = "0.18.0", note = "Renamed to SdfVolume")]
+    pub type DensityField = crate::SdfVolume;
 
-#[deprecated(since = "0.2.0", note = "Renamed to FIELD_SIZE")]
-pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
+    /// Backward compatibility aliase
+    #[deprecated(since = "0.18.0", note = "Renamed to FIELD_SIZE")]
+    pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
 
-#[deprecated(since = "0.2.0", note = "Renamed to MeshSize")]
-pub type DensityFieldMeshSize = crate::MeshSize;
+    /// Backward compatibility aliase
+    #[deprecated(since = "0.18.0", note = "Renamed to MeshSize")]
+    pub type DensityFieldMeshSize = crate::MeshSize;
 
-#[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
-pub type DensityFieldDirty = crate::GenerateMesh;
+    /// Backward compatibility aliase
+    #[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
+    pub type DensityFieldDirty = crate::GenerateMesh;
 }
-

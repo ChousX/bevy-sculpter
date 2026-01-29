@@ -12,7 +12,7 @@ categories = ["game-development", "rendering::data-formats"]
 [dependencies]
 bevy = { version = "0.18", features = ["wayland"] }
 bytemuck = "1.24.0"
-chunky-bevy = "0.18"
+chunky-bevy = {  git= "https://github.com/ChousX/chunky-bevy.git", branch = "update" }
 
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
