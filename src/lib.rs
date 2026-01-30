@@ -62,7 +62,7 @@ pub mod sdf_volume;
 pub mod prelude {
     pub use crate::backwars_compatibility::*;
     pub use crate::{
-        FIELD_SIZE, SurfaceNetsExt, SurfaceNetsPlugin,
+        FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         mesher::MeshSize,
         neighbor::{NEIGHBOR_DEPTH, NeighborFace, NeighborIsoFields, NeighborSlice},
@@ -315,12 +315,20 @@ mod backwars_compatibility {
     pub type DensityField = crate::SdfVolume;
 
     /// Backward compatibility aliase
+    #[deprecated(since = "0.18.0", note = "Renamed to FIELD_VOLUME")]
+    pub const DENSITY_FIELD_VOLUME: usize = crate::FIELD_VOLUME;
+
+    /// Backward compatibility aliase
     #[deprecated(since = "0.18.0", note = "Renamed to FIELD_SIZE")]
     pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
 
     /// Backward compatibility aliase
     #[deprecated(since = "0.18.0", note = "Renamed to MeshSize")]
     pub type DensityFieldMeshSize = crate::MeshSize;
+
+    /// Backward compatibility aliase
+    #[deprecated(since = "0.18.0", note = "Renamed to NeighborIsoFields")]
+    pub type NeighborFields = crate::NeighborIsoFields;
 
     /// Backward compatibility aliase
     #[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
