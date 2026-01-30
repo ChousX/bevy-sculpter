@@ -222,11 +222,11 @@ impl<T: Copy + Default> NeighborSlice<T> {
 /// This component is automatically added to entities with `GenerateMesh` by
 /// the registered sculptable systems. You typically don't create this manually.
 #[derive(Component, Clone, Debug, Default)]
-pub struct NeighborIsoFields {
-    pub neighbors: [Option<NeighborSlice<f32>>; 6],
+pub struct NeighborIsoFields<T> {
+    pub neighbors: [Option<NeighborSlice<T>>; 6],
 }
 
-impl NeighborIsoFields {
+impl<T> NeighborIsoFields<T> {
     /// Sample a pre-converted iso value at the given voxel coordinate.
     ///
     /// Returns `Some(iso)` if the voxel is in a neighbor's region and data exists.
@@ -256,18 +256,6 @@ impl NeighborIsoFields {
         self.neighbors.iter().filter(|n| n.is_some()).count()
     }
 }
-
-// ============================================================================
-// Backward compatibility aliases
-// ============================================================================
-
-/// Alias for backward compatibility.
-#[deprecated(since = "0.2.0", note = "Use NeighborIsoFields instead")]
-pub type NeighborDensityFields = NeighborIsoFields;
-
-/// Alias for backward compatibility.
-#[deprecated(since = "0.2.0", note = "Use NeighborSlice<f32> instead")]
-pub type DensitySlice = NeighborSlice<f32>;
 
 #[cfg(test)]
 mod tests {
