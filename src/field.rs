@@ -309,6 +309,111 @@ pub trait FieldBoxOps<T: Copy + Default>: Field<T> {
 impl<T: Copy + Default, F: Field<T>> FieldSphereOps<T> for F {}
 impl<T: Copy + Default, F: Field<T>> FieldBoxOps<T> for F {}
 
+/// SDF CSG operations for f32 fields.
+pub trait FieldMask: Field<f32> {
+    /// Applies a binary operation element-wise between two fields.
+    fn combine<F, O, Op>(&self, other: &F, op: Op) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+        Op: Fn(f32, f32) -> f32,
+    {
+        assert_eq!(Self::SIZE, F::SIZE, "Field sizes must match");
+        assert_eq!(Self::SIZE, O::SIZE, "Output field size must match");
+
+        let mut result = O::default();
+        let self_data = self.data();
+        let other_data = other.data();
+        let result_data = result.data_mut();
+
+        for i in 0..Self::VOLUME {
+            result_data[i] = op(self_data[i], other_data[i]);
+        }
+
+        result
+    }
+
+    /// CSG intersection: keeps volume inside both fields.
+    /// `max(self, other)`
+    #[inline]
+    fn intersect<F, O>(&self, other: &F) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, f32::max)
+    }
+
+    /// CSG union: combines both volumes.
+    /// `min(self, other)`
+    #[inline]
+    fn union<F, O>(&self, other: &F) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, f32::min)
+    }
+
+    /// CSG subtraction: removes `other` from `self`.
+    /// `max(self, -other)`
+    #[inline]
+    fn subtract<F, O>(&self, other: &F) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, |a, b| a.max(-b))
+    }
+
+    /// Smooth intersection with blending radius `k`.
+    #[inline]
+    fn intersect_smooth<F, O>(&self, other: &F, k: f32) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, |a, b| smooth_max(a, b, k))
+    }
+
+    /// Smooth union with blending radius `k`.
+    #[inline]
+    fn union_smooth<F, O>(&self, other: &F, k: f32) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, |a, b| smooth_min(a, b, k))
+    }
+
+    /// Smooth subtraction with blending radius `k`.
+    #[inline]
+    fn subtract_smooth<F, O>(&self, other: &F, k: f32) -> O
+    where
+        F: Field<f32>,
+        O: Field<f32>,
+    {
+        self.combine(other, |a, b| smooth_max(a, -b, k))
+    }
+}
+
+impl<T: Field<f32>> FieldMask for T {}
+
+// Smooth min/max helpers (polynomial smooth min/max)
+#[inline]
+fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    if k <= 0.0 {
+        return a.min(b);
+    }
+    let h = (k - (a - b).abs()).max(0.0) / k;
+    a.min(b) - h * h * k * 0.25
+}
+
+#[inline]
+fn smooth_max(a: f32, b: f32, k: f32) -> f32 {
+    -smooth_min(-a, -b, k)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
