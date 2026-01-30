@@ -10,7 +10,7 @@ use bevy::{
     prelude::*,
 };
 
-use crate::{NULL_VERTEX, neighbor::NeighborIsoFields, sculptable::Sculptable};
+use crate::{NULL_VERTEX, neighbor::NeighborFields, sculptable::Sculptable};
 
 /// World-space size of meshes generated from sculptable fields.
 ///
@@ -43,14 +43,15 @@ impl Default for MeshSize {
 #[deprecated(since = "0.2.0", note = "Renamed to MeshSize")]
 pub type DensityFieldMeshSize = MeshSize;
 
-/// Sampler that reads iso values from a Sculptable field and pre-converted neighbors.
+/// Sampler that reads values from a Sculptable field and neighbors,
+/// converting to iso via `Sculptable::to_iso`.
 struct IsoSampler<'a, F, T>
 where
     F: Sculptable<T>,
     T: Copy + Default + Send + Sync + 'static,
 {
     field: &'a F,
-    neighbors: &'a NeighborIsoFields,
+    neighbors: &'a NeighborFields<T>,
     _marker: PhantomData<T>,
 }
 
@@ -59,7 +60,7 @@ where
     F: Sculptable<T>,
     T: Copy + Default + Send + Sync + 'static,
 {
-    fn new(field: &'a F, neighbors: &'a NeighborIsoFields) -> Self {
+    fn new(field: &'a F, neighbors: &'a NeighborFields<T>) -> Self {
         Self {
             field,
             neighbors,
@@ -69,18 +70,17 @@ where
 
     /// Sample iso value at signed coordinates.
     ///
-    /// - Local field values are converted via `F::to_iso`
-    /// - Neighbor values are pre-converted
+    /// All values (local and neighbor) are converted via `F::to_iso`.
     #[inline]
     fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
-        // Try local field first (convert to iso)
+        // Try local field first
         if let Some(value) = self.field.get_signed(x, y, z) {
             return F::to_iso(value);
         }
 
-        // Try pre-converted neighbors
-        if let Some(iso) = self.neighbors.sample(ivec3(x, y, z), F::SIZE.as_ivec3()) {
-            return iso;
+        // Try neighbors (raw values, convert to iso)
+        if let Some(value) = self.neighbors.sample(ivec3(x, y, z), F::SIZE.as_ivec3()) {
+            return F::to_iso(value);
         }
 
         // Fallback: clamp to nearest in-bounds voxel
@@ -105,14 +105,14 @@ where
 ///
 /// # Arguments
 /// * `field` - The sculptable field to mesh
-/// * `neighbors` - Pre-converted neighbor iso data for seamless boundaries
+/// * `neighbors` - Raw neighbor data (converted to iso during sampling)
 /// * `mesh_size` - World-space dimensions of the output mesh
 ///
 /// # Returns
 /// `Some(Mesh)` if any surface was found, `None` if entirely inside or outside.
 pub fn generate_mesh_cpu<F, T>(
     field: &F,
-    neighbors: &NeighborIsoFields,
+    neighbors: &NeighborFields<T>,
     mesh_size: Vec3,
 ) -> Option<Mesh>
 where

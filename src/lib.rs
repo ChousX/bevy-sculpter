@@ -44,7 +44,7 @@
 
 pub use crate::{
     mesher::MeshSize,
-    neighbor::{NeighborFace, NeighborIsoFields, NeighborSlice},
+    neighbor::{NeighborFace, NeighborFields, NeighborSlice},
     prelude::{GenerateMesh, SdfVolume},
 };
 use bevy::prelude::*;
@@ -65,7 +65,7 @@ pub mod prelude {
         FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         mesher::MeshSize,
-        neighbor::{NEIGHBOR_DEPTH, NeighborFace, NeighborIsoFields, NeighborSlice},
+        neighbor::{NEIGHBOR_DEPTH, NeighborFace, NeighborFields, NeighborSlice},
         sculptable::{Sculptable, SdfOps},
         sdf_volume::{GenerateMesh, SdfVolume},
     };
@@ -89,7 +89,7 @@ pub const NULL_VERTEX: u32 = u32::MAX;
 /// App::new()
 ///     .add_plugins(SurfaceNetsPlugin)
 ///     .register_sculptable::<SdfVolume, f32>()
-///     .register_sculptable::<WaterField, f32>()
+///     .register_sculptable::<BinaryField, bool>()
 /// ```
 pub struct SurfaceNetsPlugin;
 
@@ -130,7 +130,7 @@ pub trait SurfaceNetsExt {
     ///
     /// # Type Parameters
     /// * `F` - Field type implementing `Sculptable<T>` and `Component`
-    /// * `T` - Storage type of the field
+    /// * `T` - Storage type of the field (e.g., `f32`, `bool`, `u8`)
     ///
     /// # Features
     /// - With `auto-mesh` feature: automatically marks entities for remeshing when `F` changes
@@ -139,7 +139,7 @@ pub trait SurfaceNetsExt {
     ///
     /// ```ignore
     /// app.register_sculptable::<SdfVolume, f32>()
-    ///    .register_sculptable::<BinaryVoxelField, u8>();
+    ///    .register_sculptable::<BinaryVoxelField, bool>();
     /// ```
     fn register_sculptable<F, T>(&mut self) -> &mut Self
     where
@@ -164,7 +164,7 @@ impl SurfaceNetsExt for App {
         self.add_systems(
             Update,
             (
-                gather_neighbor_iso_fields::<F, T>,
+                gather_neighbor_fields::<F, T>,
                 process_sculptable_mesh::<F, T>,
             )
                 .chain()
@@ -189,17 +189,17 @@ fn auto_mark_changed<F, T>(
     }
 }
 
-/// Gather pre-converted neighbor iso slices for child entities pending mesh generation.
+/// Gather raw neighbor field values for child entities pending mesh generation.
 ///
 /// This system:
 /// 1. Finds sculptable children with `GenerateMesh`
 /// 2. Traverses `ChildOf` to get parent chunk's `ChunkPos`
 /// 3. Gathers neighbor data from children of neighboring chunks with same `F` component
-/// 4. Pre-converts all values to iso (f32) for efficient meshing
-fn gather_neighbor_iso_fields<F, T>(
+/// 4. Stores raw `T` values (conversion to iso happens during meshing)
+fn gather_neighbor_fields<F, T>(
     mut commands: Commands,
     // Children that need meshing (no neighbor data yet)
-    pending: Query<(Entity, &ChildOf), (With<F>, With<GenerateMesh>, Without<NeighborIsoFields>)>,
+    pending: Query<(Entity, &ChildOf), (With<F>, With<GenerateMesh>, Without<NeighborFields<T>>)>,
     // Parent chunks with position
     chunks: Query<&ChunkPosition, With<Chunk>>,
     // All fields of this type (to find in neighbor chunks' children)
@@ -218,7 +218,7 @@ fn gather_neighbor_iso_fields<F, T>(
             continue;
         };
 
-        let mut neighbors: [Option<NeighborSlice<f32>>; 6] = Default::default();
+        let mut neighbors: [Option<NeighborSlice<T>>; 6] = Default::default();
 
         for face in NeighborFace::ALL {
             let neighbor_pos = chunk_pos.0 + face.offset();
@@ -233,23 +233,16 @@ fn gather_neighbor_iso_fields<F, T>(
                 continue;
             };
 
-            // Find child with component F and extract boundary slice
+            // Find child with component F and extract boundary slice (raw values)
             for child in neighbor_children.iter() {
                 if let Ok(field) = all_fields.get(child) {
-                    // Create pre-converted iso slice
-                    neighbors[face as usize] =
-                        Some(NeighborSlice::from_sampler(face, F::SIZE, |a, b, depth| {
-                            let (x, y, z) = face.to_field_coords(a, b, depth, F::SIZE);
-                            F::to_iso(field.get(x, y, z))
-                        }));
+                    neighbors[face as usize] = Some(NeighborSlice::from_field(field, face));
                     break; // Only one field of type F per chunk
                 }
             }
         }
 
-        commands
-            .entity(entity)
-            .insert(NeighborIsoFields { neighbors });
+        commands.entity(entity).insert(NeighborFields { neighbors });
     }
 }
 
@@ -260,7 +253,7 @@ fn process_sculptable_mesh<F, T>(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    pending: Query<(Entity, &F, &NeighborIsoFields), With<GenerateMesh>>,
+    pending: Query<(Entity, &F, &NeighborFields<T>), With<GenerateMesh>>,
     mesh_size: Res<MeshSize>,
     existing_meshes: Query<&Mesh3d>,
 ) where
@@ -291,7 +284,7 @@ fn process_sculptable_mesh<F, T>(
         commands
             .entity(entity)
             .remove::<GenerateMesh>()
-            .remove::<NeighborIsoFields>();
+            .remove::<NeighborFields<T>>();
     }
 }
 
@@ -310,27 +303,23 @@ impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {
 // ============================================================================
 
 mod backwars_compatibility {
-    /// Backward compatibility aliase
+    /// Backward compatibility alias
     #[deprecated(since = "0.18.0", note = "Renamed to SdfVolume")]
     pub type DensityField = crate::SdfVolume;
 
-    /// Backward compatibility aliase
+    /// Backward compatibility alias
     #[deprecated(since = "0.18.0", note = "Renamed to FIELD_VOLUME")]
     pub const DENSITY_FIELD_VOLUME: usize = crate::FIELD_VOLUME;
 
-    /// Backward compatibility aliase
+    /// Backward compatibility alias
     #[deprecated(since = "0.18.0", note = "Renamed to FIELD_SIZE")]
     pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
 
-    /// Backward compatibility aliase
+    /// Backward compatibility alias
     #[deprecated(since = "0.18.0", note = "Renamed to MeshSize")]
     pub type DensityFieldMeshSize = crate::MeshSize;
 
-    /// Backward compatibility aliase
-    #[deprecated(since = "0.18.0", note = "Renamed to NeighborIsoFields")]
-    pub type NeighborFields = crate::NeighborIsoFields;
-
-    /// Backward compatibility aliase
+    /// Backward compatibility alias
     #[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
     pub type DensityFieldDirty = crate::GenerateMesh;
 }

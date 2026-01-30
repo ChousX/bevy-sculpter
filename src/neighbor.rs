@@ -209,29 +209,38 @@ impl<T: Copy + Default> NeighborSlice<T> {
 }
 
 // ============================================================================
-// Pre-converted ISO neighbor data (for meshing)
+// Generic neighbor data for meshing
 // ============================================================================
 
-/// Cached neighbor iso values for seamless meshing.
+/// Cached neighbor values for seamless meshing.
 ///
-/// Stores **pre-converted** f32 signed distance values from neighboring chunks.
-/// This avoids repeated `to_iso` calls during mesh generation.
+/// Stores raw field values from neighboring chunks. The `Sculptable::to_iso`
+/// conversion happens during mesh generation, allowing this to work with
+/// any field type (f32 SDF, bool voxels, u8 materials, etc.).
 ///
 /// # Usage
 ///
 /// This component is automatically added to entities with `GenerateMesh` by
 /// the registered sculptable systems. You typically don't create this manually.
-#[derive(Component, Clone, Debug, Default)]
-pub struct NeighborIsoFields<T> {
+#[derive(Component, Clone, Debug)]
+pub struct NeighborFields<T: Copy + Default + Send + Sync + 'static> {
     pub neighbors: [Option<NeighborSlice<T>>; 6],
 }
 
-impl<T> NeighborIsoFields<T> {
-    /// Sample a pre-converted iso value at the given voxel coordinate.
+impl<T: Copy + Default + Send + Sync + 'static> Default for NeighborFields<T> {
+    fn default() -> Self {
+        Self {
+            neighbors: Default::default(),
+        }
+    }
+}
+
+impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
+    /// Sample a raw value at the given voxel coordinate.
     ///
-    /// Returns `Some(iso)` if the voxel is in a neighbor's region and data exists.
+    /// Returns `Some(value)` if the voxel is in a neighbor's region and data exists.
     #[inline]
-    pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<f32> {
+    pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<T> {
         for face in NeighborFace::ALL {
             if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size) {
                 if let Some(ref slice) = self.neighbors[face as usize] {
@@ -242,20 +251,30 @@ impl<T> NeighborIsoFields<T> {
         None
     }
 
-    /// Sample using the field size from a Sculptable type.
+    /// Sample using the field size from a Field type.
     #[inline]
-    pub fn sample_for<F: Field<impl Copy + Default>>(&self, voxel: IVec3) -> Option<f32> {
+    pub fn sample_for<F: Field<T>>(&self, voxel: IVec3) -> Option<T> {
         self.sample(voxel, F::SIZE.as_ivec3())
     }
 
+    /// Check if neighbor data exists for a given face.
     pub fn has_neighbor(&self, face: NeighborFace) -> bool {
         self.neighbors[face as usize].is_some()
     }
 
+    /// Count how many neighbors have data.
     pub fn neighbor_count(&self) -> usize {
         self.neighbors.iter().filter(|n| n.is_some()).count()
     }
 }
+
+// ============================================================================
+// Backward compatibility
+// ============================================================================
+
+/// Backward compatibility alias for f32 neighbor fields.
+#[deprecated(since = "0.19.0", note = "Renamed to NeighborFields<f32>")]
+pub type NeighborIsoFields = NeighborFields<f32>;
 
 #[cfg(test)]
 mod tests {
@@ -280,8 +299,8 @@ mod tests {
     }
 
     #[test]
-    fn test_neighbor_iso_sample() {
-        let mut fields = NeighborIsoFields::default();
+    fn test_neighbor_fields_sample() {
+        let mut fields: NeighborFields<f32> = NeighborFields::default();
 
         fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
             NeighborFace::PosX,
@@ -292,6 +311,23 @@ mod tests {
         assert_eq!(
             fields.sample(ivec3(32, 5, 5), ivec3(32, 32, 32)),
             Some(-0.5)
+        );
+        assert_eq!(fields.sample(ivec3(5, 5, 5), ivec3(32, 32, 32)), None);
+    }
+
+    #[test]
+    fn test_neighbor_fields_bool() {
+        let mut fields: NeighborFields<bool> = NeighborFields::default();
+
+        fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
+            NeighborFace::PosX,
+            uvec3(32, 32, 32),
+            |_, _, _| true,
+        ));
+
+        assert_eq!(
+            fields.sample(ivec3(32, 5, 5), ivec3(32, 32, 32)),
+            Some(true)
         );
         assert_eq!(fields.sample(ivec3(5, 5, 5), ivec3(32, 32, 32)), None);
     }
