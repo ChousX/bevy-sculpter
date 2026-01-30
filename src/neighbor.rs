@@ -236,6 +236,51 @@ impl<T: Copy + Default + Send + Sync + 'static> Default for NeighborFields<T> {
 }
 
 impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
+    /// Gather neighbor data using a closure that returns an optional field reference for each face.
+    ///
+    /// The closure receives each `NeighborFace` and should return `Some(&Field)` if
+    /// neighbor data exists for that face, or `None` if not.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let neighbors = NeighborFields::<bool>::gather(|face| {
+    ///     let neighbor_pos = chunk_pos + face.offset();
+    ///     let neighbor_chunk = chunk_manager.get_chunk(&neighbor_pos)?;
+    ///     fields.iter()
+    ///         .find(|(_, parent)| parent.0 == neighbor_chunk)
+    ///         .map(|(field, _)| field)
+    /// });
+    /// ```
+    pub fn gather<'a, F, Fld>(mut get_neighbor: F) -> Self
+    where
+        F: FnMut(NeighborFace) -> Option<&'a Fld>,
+        Fld: Field<T> + 'a,
+    {
+        let mut result = Self::default();
+        for face in NeighborFace::ALL {
+            if let Some(field) = get_neighbor(face) {
+                result.neighbors[face as usize] = Some(NeighborSlice::from_field(field, face));
+            }
+        }
+        result
+    }
+
+    /// Gather neighbor data using a closure that returns an optional slice for each face.
+    ///
+    /// Lower-level version of [`gather`] for when you already have slices or need
+    /// custom slice construction.
+    pub fn gather_slices<F>(mut get_slice: F) -> Self
+    where
+        F: FnMut(NeighborFace) -> Option<NeighborSlice<T>>,
+    {
+        let mut result = Self::default();
+        for face in NeighborFace::ALL {
+            result.neighbors[face as usize] = get_slice(face);
+        }
+        result
+    }
+
     /// Sample a raw value at the given voxel coordinate.
     ///
     /// Returns `Some(value)` if the voxel is in a neighbor's region and data exists.
