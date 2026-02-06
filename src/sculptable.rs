@@ -1,44 +1,42 @@
 //! The core trait for meshable volumetric fields.
 //!
 //! [`Sculptable`] is the primary trait for any field that can be meshed with Surface Nets.
-//! It extends [`Field`] with the ability to convert storage values to signed distance values.
+//! It extends [`Field`] with iso sampling via [`IsoConvertible`].
 
 use bevy::prelude::*;
 
 use crate::field::Field;
+use crate::field_csg::IsoConvertible;
 
 /// A volumetric field that can be meshed with Surface Nets.
 ///
-/// This trait converts the underlying storage type `T` to signed distance values where:
+/// This trait uses [`IsoConvertible`] on the storage type to convert values
+/// to signed distances where:
 /// - Negative = inside the surface
 /// - Positive = outside the surface  
 /// - Zero = exactly on the surface
 ///
 /// # Type Parameters
-/// * `T` - The storage type (e.g., `f32` for raw SDF, `u8` for binary/material IDs)
+/// * `T` - The storage type, must implement [`IsoConvertible`]
 ///
 /// # Example: Raw SDF
 ///
 /// ```ignore
-/// impl Sculptable<f32> for SdfVolume {
-///     fn to_iso(value: f32) -> f32 {
-///         value // Identity - already an SDF
-///     }
-/// }
+/// // f32 already implements IsoConvertible (identity),
+/// // so just derive/impl Sculptable:
+/// impl Sculptable<f32> for SdfVolume {}
 /// ```
 ///
 /// # Example: Binary Voxels
 ///
 /// ```ignore
-/// impl Sculptable<u8> for BinaryVoxelField {
-///     fn to_iso(value: u8) -> f32 {
-///         if value > 0 { -1.0 } else { 1.0 }
-///     }
-/// }
+/// // bool implements IsoConvertible (true → -1.0, false → 1.0),
+/// // so just:
+/// impl Sculptable<bool> for BinaryVoxelField {}
 /// ```
 pub trait Sculptable<T>: Field<T> + Component
 where
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     /// The default iso value for out-of-bounds sampling.
     ///
@@ -46,24 +44,16 @@ where
     /// won't generate surfaces.
     const DEFAULT_ISO: f32 = 1.0;
 
-    /// Convert the storage type to a signed distance value.
-    ///
-    /// This is the core conversion that determines surface boundaries:
-    /// - Return negative values for "inside" the surface
-    /// - Return positive values for "outside" the surface
-    /// - The zero-crossing defines the surface
-    fn to_iso(value: T) -> f32;
-
     /// Sample and convert to iso at unsigned grid coordinates.
     #[inline]
     fn sample_iso(&self, x: u32, y: u32, z: u32) -> f32 {
-        Self::to_iso(self.get(x, y, z))
+        self.get(x, y, z).to_iso()
     }
 
     /// Sample and convert to iso at UVec3 coordinates.
     #[inline]
     fn sample_iso_uvec3(&self, pos: UVec3) -> f32 {
-        Self::to_iso(self.get_uvec3(pos))
+        self.get_uvec3(pos).to_iso()
     }
 
     /// Sample and convert to iso at signed coordinates.
@@ -71,7 +61,7 @@ where
     /// Returns `None` if out of bounds.
     #[inline]
     fn sample_iso_signed(&self, x: i32, y: i32, z: i32) -> Option<f32> {
-        self.get_signed(x, y, z).map(Self::to_iso)
+        self.get_signed(x, y, z).map(|v| v.to_iso())
     }
 
     /// Sample and convert to iso at IVec3 coordinates.
@@ -141,5 +131,4 @@ pub trait SdfOps: Sculptable<f32> {
     }
 }
 
-// Blanket implementation: any Sculptable<f32> gets SdfOps
 impl<F: Sculptable<f32>> SdfOps for F {}

@@ -51,7 +51,10 @@ use bevy::prelude::*;
 use chunky_bevy::ChunkyPlugin;
 pub use chunky_bevy::prelude::{Chunk, ChunkManager, ChunkPosition};
 
+use field_csg::IsoConvertible;
+
 pub mod field;
+pub mod field_csg;
 pub mod helpers;
 pub mod mesher;
 pub mod neighbor;
@@ -64,6 +67,7 @@ pub mod prelude {
     pub use crate::{
         FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
+        field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
         neighbor::{NEIGHBOR_DEPTH, NeighborFace, NeighborFields, NeighborSlice},
         sculptable::{Sculptable, SdfOps},
@@ -144,14 +148,14 @@ pub trait SurfaceNetsExt {
     fn register_sculptable<F, T>(&mut self) -> &mut Self
     where
         F: sculptable::Sculptable<T> + Component,
-        T: Copy + Default + Send + Sync + 'static;
+        T: IsoConvertible + Send + Sync + 'static;
 }
 
 impl SurfaceNetsExt for App {
     fn register_sculptable<F, T>(&mut self) -> &mut Self
     where
         F: sculptable::Sculptable<T> + Component,
-        T: Copy + Default + Send + Sync + 'static,
+        T: IsoConvertible + Send + Sync + 'static,
     {
         // Auto-mesh: mark changed fields for regeneration
         #[cfg(feature = "auto-mesh")]
@@ -182,7 +186,7 @@ fn auto_mark_changed<F, T>(
     changed: Query<Entity, (Changed<F>, Without<GenerateMesh>)>,
 ) where
     F: sculptable::Sculptable<T> + Component,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     for entity in changed.iter() {
         commands.entity(entity).insert(GenerateMesh);
@@ -210,7 +214,7 @@ fn gather_neighbor_fields<F, T>(
     children_query: Query<&Children>,
 ) where
     F: sculptable::Sculptable<T> + Component,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     for (entity, child_of) in pending.iter() {
         // Get parent chunk's position
@@ -258,7 +262,7 @@ fn process_sculptable_mesh<F, T>(
     existing_meshes: Query<&Mesh3d>,
 ) where
     F: sculptable::Sculptable<T> + Component,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     for (entity, field, neighbors) in pending.iter() {
         if let Some(mesh) = mesher::generate_mesh_cpu::<F, T>(field, neighbors, mesh_size.0) {
@@ -292,11 +296,7 @@ fn process_sculptable_mesh<F, T>(
 // Implement Sculptable for SdfVolume
 // ============================================================================
 
-impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {
-    fn to_iso(value: f32) -> f32 {
-        value // Identity - already a signed distance
-    }
-}
+impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {}
 
 // ============================================================================
 // Backward compatibility aliases

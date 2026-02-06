@@ -5,12 +5,12 @@
 
 use std::marker::PhantomData;
 
+use crate::field_csg::IsoConvertible;
+use crate::{NULL_VERTEX, neighbor::NeighborFields, sculptable::Sculptable};
 use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-
-use crate::{NULL_VERTEX, neighbor::NeighborFields, sculptable::Sculptable};
 
 /// World-space size of meshes generated from sculptable fields.
 ///
@@ -45,10 +45,11 @@ pub type DensityFieldMeshSize = MeshSize;
 
 /// Sampler that reads values from a Sculptable field and neighbors,
 /// converting to iso via `Sculptable::to_iso`.
+
 struct IsoSampler<'a, F, T>
 where
     F: Sculptable<T>,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     field: &'a F,
     neighbors: &'a NeighborFields<T>,
@@ -58,7 +59,7 @@ where
 impl<'a, F, T> IsoSampler<'a, F, T>
 where
     F: Sculptable<T>,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     fn new(field: &'a F, neighbors: &'a NeighborFields<T>) -> Self {
         Self {
@@ -68,22 +69,16 @@ where
         }
     }
 
-    /// Sample iso value at signed coordinates.
-    ///
-    /// All values (local and neighbor) are converted via `F::to_iso`.
     #[inline]
     fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
-        // Try local field first
         if let Some(value) = self.field.get_signed(x, y, z) {
-            return F::to_iso(value);
+            return value.to_iso();
         }
 
-        // Try neighbors (raw values, convert to iso)
         if let Some(value) = self.neighbors.sample(ivec3(x, y, z), F::SIZE.as_ivec3()) {
-            return F::to_iso(value);
+            return value.to_iso();
         }
 
-        // Fallback: clamp to nearest in-bounds voxel
         let size = F::SIZE.as_ivec3();
         let cx = x.clamp(0, size.x - 1) as u32;
         let cy = y.clamp(0, size.y - 1) as u32;
@@ -97,19 +92,7 @@ where
     }
 }
 
-/// Generates a mesh from a Sculptable field using the Surface Nets algorithm.
-///
-/// # Type Parameters
-/// * `F` - Field type implementing `Sculptable<T>`
-/// * `T` - Storage type of the field
-///
-/// # Arguments
-/// * `field` - The sculptable field to mesh
-/// * `neighbors` - Raw neighbor data (converted to iso during sampling)
-/// * `mesh_size` - World-space dimensions of the output mesh
-///
-/// # Returns
-/// `Some(Mesh)` if any surface was found, `None` if entirely inside or outside.
+// And update generate_mesh_cpu's bound:
 pub fn generate_mesh_cpu<F, T>(
     field: &F,
     neighbors: &NeighborFields<T>,
@@ -117,7 +100,7 @@ pub fn generate_mesh_cpu<F, T>(
 ) -> Option<Mesh>
 where
     F: Sculptable<T>,
-    T: Copy + Default + Send + Sync + 'static,
+    T: IsoConvertible + Send + Sync + 'static,
 {
     let sampler = IsoSampler::new(field, neighbors);
     let field_size = F::SIZE;
