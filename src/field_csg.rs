@@ -55,6 +55,24 @@ impl IsoConvertible for u8 {
     }
 }
 
+impl IsoConvertible for i8 {
+    fn to_iso(self) -> f32 {
+        if self >= 0 {
+            self as f32 / 127.0
+        } else {
+            self as f32 / 128.0
+        }
+    }
+
+    fn from_iso(iso: f32) -> Self {
+        let clamped = iso.clamp(-1.0, 1.0);
+        if clamped >= 0.0 {
+            (clamped * 127.0).round() as i8
+        } else {
+            (clamped * 128.0).round().max(-128.0) as i8
+        }
+    }
+}
 // ============================================================================
 // CSG operation enum
 // ============================================================================
