@@ -82,7 +82,7 @@ where
         }
 
         // 3. No neighbor data available — return default (outside/air)
-        F::DEFAULT_ISO
+        F::DEFAULT.to_iso()
     }
 
     #[inline]
