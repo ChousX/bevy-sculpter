@@ -71,19 +71,18 @@ where
 
     #[inline]
     fn sample(&self, x: i32, y: i32, z: i32) -> f32 {
+        // 1. In bounds — read from local field
         if let Some(value) = self.field.get_signed(x, y, z) {
             return value.to_iso();
         }
 
+        // 2. Out of bounds — read from neighbor (face, edge, or corner)
         if let Some(value) = self.neighbors.sample(ivec3(x, y, z), F::SIZE.as_ivec3()) {
             return value.to_iso();
         }
 
-        let size = F::SIZE.as_ivec3();
-        let cx = x.clamp(0, size.x - 1) as u32;
-        let cy = y.clamp(0, size.y - 1) as u32;
-        let cz = z.clamp(0, size.z - 1) as u32;
-        self.field.sample_iso(cx, cy, cz)
+        // 3. No neighbor data available — return default (outside/air)
+        F::DEFAULT_ISO
     }
 
     #[inline]

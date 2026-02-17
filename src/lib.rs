@@ -44,7 +44,10 @@
 
 pub use crate::{
     mesher::MeshSize,
-    neighbor::{NeighborFace, NeighborFields, NeighborSlice},
+    neighbor::{
+        NeighborCorner, NeighborCornerSlice, NeighborEdge, NeighborEdgeSlice, NeighborFace,
+        NeighborFields, NeighborSlice,
+    },
     prelude::{GenerateMesh, SdfVolume},
 };
 use bevy::prelude::*;
@@ -69,7 +72,10 @@ pub mod prelude {
         field::Field,
         field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
-        neighbor::{NEIGHBOR_DEPTH, NeighborFace, NeighborFields, NeighborSlice},
+        neighbor::{
+            NEIGHBOR_DEPTH, NeighborCorner, NeighborCornerSlice, NeighborEdge, NeighborEdgeSlice,
+            NeighborFace, NeighborFields, NeighborSlice,
+        },
         sculptable::{Sculptable, SdfOps},
         sdf_volume::{GenerateMesh, SdfVolume},
     };
@@ -201,61 +207,75 @@ fn auto_mark_changed<F, T>(
 /// 3. Gathers neighbor data from children of neighboring chunks with same `F` component
 /// 4. Stores raw `T` values (conversion to iso happens during meshing)
 ///
-/// When a neighbor chunk exists but has no child with component `F`, the neighbor
-/// slice is filled with `T::from_iso(1.0)` (outside) so boundary faces generate correctly.
+/// Gathers all 26 neighbors: 6 faces, 12 edges, 8 corners.
 fn gather_neighbor_fields<F, T>(
     mut commands: Commands,
+    // Children that need meshing (no neighbor data yet)
     pending: Query<(Entity, &ChildOf), (With<F>, With<GenerateMesh>, Without<NeighborFields<T>>)>,
+    // Parent chunks with position
     chunks: Query<&ChunkPosition, With<Chunk>>,
+    // All fields of this type (to find in neighbor chunks' children)
     all_fields: Query<&F>,
+    // Chunk lookup
     chunk_manager: Res<ChunkManager>,
+    // To find children of neighbor chunks
     children_query: Query<&Children>,
 ) where
     F: sculptable::Sculptable<T> + Component,
     T: IsoConvertible + Send + Sync + 'static,
 {
     for (entity, child_of) in pending.iter() {
+        // Get parent chunk's position
         let Ok(chunk_pos) = chunks.get(child_of.parent()) else {
             continue;
         };
 
-        let mut neighbors: [Option<NeighborSlice<T>>; 6] = Default::default();
+        let mut neighbor_fields = NeighborFields::<T>::default();
 
+        // Helper: find the field component F in a chunk's children
+        let find_field = |pos: IVec3| -> Option<Entity> {
+            let chunk = chunk_manager.get_chunk(&pos)?;
+            let children = children_query.get(chunk).ok()?;
+            children
+                .iter()
+                .find(|child| all_fields.get(*child).is_ok())
+                .take()
+        };
+
+        // 6 face neighbors
         for face in NeighborFace::ALL {
             let neighbor_pos = chunk_pos.0 + face.offset();
-
-            let Some(neighbor_chunk) = chunk_manager.get_chunk(&neighbor_pos) else {
-                continue;
-            };
-
-            let Ok(neighbor_children) = children_query.get(neighbor_chunk) else {
-                // Chunk exists but has no children — treat as outside
-                neighbors[face as usize] =
-                    Some(NeighborSlice::from_sampler(face, F::SIZE, |_, _, _| {
-                        T::from_iso(1.0)
-                    }));
-                continue;
-            };
-
-            let mut found = false;
-            for child in neighbor_children.iter() {
+            if let Some(child) = find_field(neighbor_pos) {
                 if let Ok(field) = all_fields.get(child) {
-                    neighbors[face as usize] = Some(NeighborSlice::from_field(field, face));
-                    found = true;
-                    break;
+                    neighbor_fields.neighbors[face as usize] =
+                        Some(NeighborSlice::from_field(field, face));
                 }
-            }
-
-            // Chunk has children but none with component F — treat as outside
-            if !found {
-                neighbors[face as usize] =
-                    Some(NeighborSlice::from_sampler(face, F::SIZE, |_, _, _| {
-                        T::from_iso(1.0)
-                    }));
             }
         }
 
-        commands.entity(entity).insert(NeighborFields { neighbors });
+        // 12 edge neighbors
+        for edge in NeighborEdge::ALL {
+            let neighbor_pos = chunk_pos.0 + edge.offset();
+            if let Some(child) = find_field(neighbor_pos) {
+                if let Ok(field) = all_fields.get(child) {
+                    neighbor_fields.edges[edge as usize] =
+                        Some(NeighborEdgeSlice::from_field(field, edge));
+                }
+            }
+        }
+
+        // 8 corner neighbors
+        for corner in NeighborCorner::ALL {
+            let neighbor_pos = chunk_pos.0 + corner.offset();
+            if let Some(child) = find_field(neighbor_pos) {
+                if let Ok(field) = all_fields.get(child) {
+                    neighbor_fields.corners[corner as usize] =
+                        Some(NeighborCornerSlice::from_field(field, corner));
+                }
+            }
+        }
+
+        commands.entity(entity).insert(neighbor_fields);
     }
 }
 
