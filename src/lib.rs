@@ -63,7 +63,6 @@ pub mod sdf_volume;
 
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
-    pub use crate::backwars_compatibility::*;
     pub use crate::{
         FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
@@ -234,92 +233,33 @@ fn gather_neighbor_fields<F, T>(
 
             // Find children of neighbor chunk
             let Ok(neighbor_children) = children_query.get(neighbor_chunk) else {
+                // Chunk exists but has no children — fill with "outside"
+                neighbors[face as usize] =
+                    Some(NeighborSlice::from_sampler(face, F::SIZE, |_, _, _| {
+                        T::from_iso(1.0)
+                    }));
                 continue;
             };
 
             // Find child with component F and extract boundary slice (raw values)
+            let mut found = false;
             for child in neighbor_children.iter() {
                 if let Ok(field) = all_fields.get(child) {
                     neighbors[face as usize] = Some(NeighborSlice::from_field(field, face));
+                    found = true;
                     break; // Only one field of type F per chunk
                 }
+            }
+
+            // Chunk exists with children but none have component F — fill with "outside"
+            if !found {
+                neighbors[face as usize] =
+                    Some(NeighborSlice::from_sampler(face, F::SIZE, |_, _, _| {
+                        T::from_iso(1.0)
+                    }));
             }
         }
 
         commands.entity(entity).insert(NeighborFields { neighbors });
     }
-}
-
-/// Generate meshes for sculptable children that have neighbor data ready.
-///
-/// The mesh is attached to the child entity, inheriting its `Transform`.
-fn process_sculptable_mesh<F, T>(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    pending: Query<(Entity, &F, &NeighborFields<T>), With<GenerateMesh>>,
-    mesh_size: Res<MeshSize>,
-    existing_meshes: Query<&Mesh3d>,
-) where
-    F: sculptable::Sculptable<T> + Component,
-    T: IsoConvertible + Send + Sync + 'static,
-{
-    for (entity, field, neighbors) in pending.iter() {
-        if let Some(mesh) = mesher::generate_mesh_cpu::<F, T>(field, neighbors, mesh_size.0) {
-            let mesh_handle = meshes.add(mesh);
-
-            if existing_meshes.get(entity).is_ok() {
-                // Update existing mesh
-                commands.entity(entity).insert(Mesh3d(mesh_handle));
-            } else {
-                // Add mesh + default material
-                commands.entity(entity).insert((
-                    Mesh3d(mesh_handle),
-                    MeshMaterial3d(materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.5, 0.7, 0.5),
-                        perceptual_roughness: 0.8,
-                        ..default()
-                    })),
-                ));
-            }
-        }
-
-        // Clean up markers
-        commands
-            .entity(entity)
-            .remove::<GenerateMesh>()
-            .remove::<NeighborFields<T>>();
-    }
-}
-
-// ============================================================================
-// Implement Sculptable for SdfVolume
-// ============================================================================
-
-impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {}
-
-// ============================================================================
-// Backward compatibility aliases
-// ============================================================================
-
-mod backwars_compatibility {
-    /// Backward compatibility alias
-    #[deprecated(since = "0.18.0", note = "Renamed to SdfVolume")]
-    pub type DensityField = crate::SdfVolume;
-
-    /// Backward compatibility alias
-    #[deprecated(since = "0.18.0", note = "Renamed to FIELD_VOLUME")]
-    pub const DENSITY_FIELD_VOLUME: usize = crate::FIELD_VOLUME;
-
-    /// Backward compatibility alias
-    #[deprecated(since = "0.18.0", note = "Renamed to FIELD_SIZE")]
-    pub const DENSITY_FIELD_SIZE: bevy::math::UVec3 = crate::FIELD_SIZE;
-
-    /// Backward compatibility alias
-    #[deprecated(since = "0.18.0", note = "Renamed to MeshSize")]
-    pub type DensityFieldMeshSize = crate::MeshSize;
-
-    /// Backward compatibility alias
-    #[deprecated(since = "0.2.0", note = "Renamed to GenerateMesh")]
-    pub type DensityFieldDirty = crate::GenerateMesh;
 }
