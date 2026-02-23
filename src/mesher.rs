@@ -45,7 +45,6 @@ pub type DensityFieldMeshSize = MeshSize;
 
 /// Sampler that reads values from a Sculptable field and neighbors,
 /// converting to iso via `Sculptable::to_iso`.
-
 struct IsoSampler<'a, F, T>
 where
     F: Sculptable<T>,
@@ -91,7 +90,7 @@ where
     }
 }
 
-// And update generate_mesh_cpu's bound:
+/// Generate a Surface Nets mesh at full resolution (step = 1).
 pub fn generate_mesh_cpu<F, T>(
     field: &F,
     neighbors: &NeighborFields<T>,
@@ -101,15 +100,41 @@ where
     F: Sculptable<T>,
     T: IsoConvertible + Send + Sync + 'static,
 {
+    generate_mesh_cpu_lod(field, neighbors, mesh_size, 1)
+}
+
+/// Generate a Surface Nets mesh with configurable LOD step size.
+///
+/// `step` controls the sampling stride through the SDF field:
+/// - 1 = full resolution (32³ for a 32-sized field)
+/// - 2 = half resolution (16³)
+/// - 4 = quarter resolution (8³)
+/// - 8 = eighth resolution (4³)
+///
+/// The mesh always covers the same world-space size regardless of step.
+pub fn generate_mesh_cpu_lod<F, T>(
+    field: &F,
+    neighbors: &NeighborFields<T>,
+    mesh_size: Vec3,
+    step: u32,
+) -> Option<Mesh>
+where
+    F: Sculptable<T>,
+    T: IsoConvertible + Send + Sync + 'static,
+{
     let sampler = IsoSampler::new(field, neighbors);
     let field_size = F::SIZE;
+    let step_i = step as i32;
+
+    // LOD grid dimensions: how many cells we have at this step size
+    let lod_size = field_size / step;
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    // Extended size for boundary vertices
-    let ext_size = field_size + UVec3::ONE;
+    // Extended size for boundary vertices (in LOD grid space)
+    let ext_size = lod_size + UVec3::ONE;
     let ext_vol = (ext_size.x * ext_size.y * ext_size.z) as usize;
     let mut vtx_lookup = vec![NULL_VERTEX; ext_vol];
 
@@ -154,36 +179,46 @@ where
         [6, 7],
     ];
 
-    let scale = mesh_size / field_size.as_vec3();
+    // Scale: LOD grid cell → world space
+    // Each LOD cell covers `step` voxels, so scale = mesh_size / lod_size
+    let scale = mesh_size / lod_size.as_vec3();
     let grid_to_world = |p: Vec3| -> [f32; 3] {
         let w = p * scale;
         [w.x, w.y, w.z]
     };
 
     // Pass 1: Generate vertices
-    for z in 0..=field_size.z {
-        for y in 0..=field_size.y {
-            for x in 0..=field_size.x {
-                let voxel = ivec3(x as i32, y as i32, z as i32);
+    // Iterate in LOD grid space, sample from field at `lod * step` positions
+    for lz in 0..=lod_size.z {
+        for ly in 0..=lod_size.y {
+            for lx in 0..=lod_size.x {
+                // Map LOD grid coord back to field space for sampling
+                let fx = (lx * step) as i32;
+                let fy = (ly * step) as i32;
+                let fz = (lz * step) as i32;
 
                 let mut corner_iso = [0.0f32; 8];
                 let mut num_neg = 0;
 
                 for (i, off) in CORNERS.iter().enumerate() {
-                    corner_iso[i] = sampler.sample_ivec3(voxel + *off);
+                    corner_iso[i] = sampler.sample(
+                        fx + off.x * step_i,
+                        fy + off.y * step_i,
+                        fz + off.z * step_i,
+                    );
                     if corner_iso[i] < 0.0 {
                         num_neg += 1;
                     }
                 }
 
-                let stride = ext_idx(x, y, z);
+                let stride = ext_idx(lx, ly, lz);
 
                 if num_neg == 0 || num_neg == 8 {
                     vtx_lookup[stride] = NULL_VERTEX;
                     continue;
                 }
 
-                // Centroid of edge crossings
+                // Centroid of edge crossings (in LOD cell [0,1] space)
                 let mut sum = Vec3::ZERO;
                 let mut count = 0.0;
 
@@ -205,16 +240,15 @@ where
                 } else {
                     Vec3::splat(0.5)
                 };
-                let grid_pos = voxel.as_vec3() + centroid;
+
+                // Position in LOD grid space
+                let grid_pos = vec3(lx as f32, ly as f32, lz as f32) + centroid;
                 let world_pos = grid_to_world(grid_pos);
 
-                // Normal via central differences
-                let dx = sampler.sample(voxel.x + 1, voxel.y, voxel.z)
-                    - sampler.sample(voxel.x - 1, voxel.y, voxel.z);
-                let dy = sampler.sample(voxel.x, voxel.y + 1, voxel.z)
-                    - sampler.sample(voxel.x, voxel.y - 1, voxel.z);
-                let dz = sampler.sample(voxel.x, voxel.y, voxel.z + 1)
-                    - sampler.sample(voxel.x, voxel.y, voxel.z - 1);
+                // Normal via central differences (sample at step distance in field space)
+                let dx = sampler.sample(fx + step_i, fy, fz) - sampler.sample(fx - step_i, fy, fz);
+                let dy = sampler.sample(fx, fy + step_i, fz) - sampler.sample(fx, fy - step_i, fz);
+                let dz = sampler.sample(fx, fy, fz + step_i) - sampler.sample(fx, fy, fz - step_i);
 
                 let grad = vec3(dx, dy, dz);
                 let normal = if grad.length_squared() > 0.0001 {
@@ -234,27 +268,29 @@ where
         return None;
     }
 
-    // Pass 2: Generate quads
+    // Pass 2: Generate quads (in LOD grid space)
     let ext_sx = 1usize;
     let ext_sy = ext_size.x as usize;
     let ext_sz = (ext_size.x * ext_size.y) as usize;
 
-    for z in 1..=field_size.z {
-        for y in 1..=field_size.y {
-            for x in 1..=field_size.x {
-                let stride = ext_idx(x, y, z);
+    for lz in 1..=lod_size.z {
+        for ly in 1..=lod_size.y {
+            for lx in 1..=lod_size.x {
+                let stride = ext_idx(lx, ly, lz);
                 let v0 = vtx_lookup[stride];
 
                 if v0 == NULL_VERTEX {
                     continue;
                 }
 
-                let voxel = ivec3(x as i32, y as i32, z as i32);
+                let fx = (lx * step) as i32;
+                let fy = (ly * step) as i32;
+                let fz = (lz * step) as i32;
 
-                let d0 = sampler.sample_ivec3(voxel);
-                let dx = sampler.sample_ivec3(voxel + IVec3::X);
-                let dy = sampler.sample_ivec3(voxel + IVec3::Y);
-                let dz = sampler.sample_ivec3(voxel + IVec3::Z);
+                let d0 = sampler.sample(fx, fy, fz);
+                let dx = sampler.sample(fx + step_i, fy, fz);
+                let dy = sampler.sample(fx, fy + step_i, fz);
+                let dz = sampler.sample(fx, fy, fz + step_i);
 
                 // X-axis edge
                 if (d0 < 0.0) != (dx < 0.0) {

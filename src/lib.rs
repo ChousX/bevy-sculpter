@@ -25,7 +25,7 @@ pub mod sdf_volume;
 pub mod prelude {
     pub use crate::backwars_compatibility::*;
     pub use crate::{
-        FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
+        FIELD_SIZE, FIELD_VOLUME, LodLevel, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
@@ -46,6 +46,40 @@ pub const FIELD_VOLUME: usize = (FIELD_SIZE.x * FIELD_SIZE.y * FIELD_SIZE.z) as 
 
 /// Sentinel value indicating no vertex exists at a position.
 pub const NULL_VERTEX: u32 = u32::MAX;
+
+/// Level of detail for mesh generation.
+///
+/// Controls the sampling stride through the SDF field. The step size
+/// is `2^level`, so:
+/// - Level 0 = step 1 (full resolution, 32³)
+/// - Level 1 = step 2 (half resolution, 16³)
+/// - Level 2 = step 4 (quarter resolution, 8³)
+/// - Level 3 = step 8 (eighth resolution, 4³)
+///
+/// Place this on a **chunk entity** (parent). When mesh generation is
+/// triggered, the LOD level propagates to child field entities automatically.
+///
+/// If absent, defaults to level 0 (full resolution).
+///
+/// # Example
+///
+/// ```ignore
+/// commands.spawn((
+///     Chunk,
+///     ChunkPosition(ivec3(0, 0, 0)),
+///     LodLevel(2), // quarter resolution
+/// ));
+/// ```
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LodLevel(pub u8);
+
+impl LodLevel {
+    /// Returns the sampling step size: `2^level`.
+    #[inline]
+    pub fn step(&self) -> u32 {
+        1 << self.0
+    }
+}
 
 /// Plugin that enables Surface Nets mesh generation.
 ///
@@ -260,12 +294,16 @@ fn gather_neighbor_fields<F, T>(
 ///
 /// Clones field + neighbor data, spawns a background task, and attaches
 /// a `MeshTaskPending` component. The entity keeps its field data intact.
+///
+/// Reads `LodLevel` from the parent chunk to determine the sampling step.
+/// If no `LodLevel` is present, defaults to full resolution (step 1).
 fn dispatch_mesh_tasks<F, T>(
     mut commands: Commands,
     pending: Query<
-        (Entity, &F, &NeighborFields<T>),
+        (Entity, &F, &NeighborFields<T>, &ChildOf),
         (With<GenerateMesh>, Without<MeshTaskPending>),
     >,
+    chunk_lods: Query<Option<&LodLevel>, With<Chunk>>,
     mesh_size: Res<MeshSize>,
     budget: Res<MeshBudget>,
 ) where
@@ -276,17 +314,25 @@ fn dispatch_mesh_tasks<F, T>(
     let ms = mesh_size.0;
 
     let mut dispatched = 0;
-    for (entity, field, neighbors) in pending.iter() {
+    for (entity, field, neighbors, child_of) in pending.iter() {
         if dispatched >= budget.max_dispatches_per_frame {
             break;
         }
+
+        // Read LOD from parent chunk, default to 0
+        let step = chunk_lods
+            .get(child_of.parent())
+            .ok()
+            .flatten()
+            .map(|lod| lod.step())
+            .unwrap_or(1);
 
         // Clone data for the background task
         let field_clone = field.clone();
         let neighbors_clone = neighbors.clone();
 
         let task = pool.spawn(async move {
-            mesher::generate_mesh_cpu::<F, T>(&field_clone, &neighbors_clone, ms)
+            mesher::generate_mesh_cpu_lod::<F, T>(&field_clone, &neighbors_clone, ms, step)
         });
 
         commands
