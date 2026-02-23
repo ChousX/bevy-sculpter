@@ -19,6 +19,7 @@ fn main() {
         .insert_resource(MeshSize(vec3(10., 10., 10.)))
         .add_systems(Startup, (setup_default_mesh_material, setup).chain())
         .add_systems(Update, fly_camera)
+        .add_observer(on_mesh)
         .run();
 }
 
@@ -41,15 +42,19 @@ impl Default for FlyCam {
     }
 }
 
+#[derive(Resource, Deref)]
+pub struct DefaultMeshMaterial(pub Handle<StandardMaterial>);
+
+fn on_mesh(trigger: On<Add, Mesh3d>, mut commands: Commands, mat: Res<DefaultMeshMaterial>) {
+    commands
+        .entity(trigger.entity)
+        .insert(MeshMaterial3d(mat.0.clone()));
+}
+
 fn setup_default_mesh_material(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    existing: Option<Res<DefaultMeshMaterial>>,
 ) {
-    // Don't overwrite if user already inserted one
-    if existing.is_some() {
-        return;
-    }
     commands.insert_resource(DefaultMeshMaterial(materials.add(StandardMaterial {
         base_color: Color::srgb(0.5, 0.7, 0.5),
         perceptual_roughness: 0.8,

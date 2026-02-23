@@ -1,47 +1,3 @@
-//! # bevy-sculpter
-//!
-//! SDF-based voxel sculpting and Surface Nets meshing for Bevy.
-//!
-//! ## Quick Start
-//!
-//! ```no_run
-//! use bevy::prelude::*;
-//! use bevy_sculpter::prelude::*;
-//! use chunky_bevy::prelude::*;
-//!
-//! fn main() {
-//!     App::new()
-//!         .add_plugins(DefaultPlugins)
-//!         .add_plugins(SurfaceNetsPlugin)
-//!         .register_sculptable::<SdfVolume, f32>()
-//!         .insert_resource(MeshSize(vec3(10., 10., 10.)))
-//!         .add_systems(Startup, setup)
-//!         .run();
-//! }
-//!
-//! fn setup(mut commands: Commands) {
-//!     // Spawn chunk parent
-//!     let chunk = commands.spawn((Chunk, ChunkPos(ivec3(0, 0, 0)))).id();
-//!     
-//!     // Spawn sculptable field as child - mesh inherits child's transform
-//!     let mut field = SdfVolume::new();
-//!     bevy_sculpter::helpers::fill_centered_sphere(&mut field, 12.0);
-//!     
-//!     commands.spawn((
-//!         field,
-//!         GenerateMesh,
-//!         Transform::default(),
-//!     )).set_parent(chunk);
-//! }
-//! ```
-//!
-//! ## GenerateMesh Behavior
-//!
-//! - **On child entity**: Only that child's mesh is regenerated
-//! - **On parent chunk**: Propagates to ALL children, regenerating all meshes
-
-#![warn(missing_docs)]
-
 pub use crate::{
     mesher::MeshSize,
     neighbor::{
@@ -69,7 +25,7 @@ pub mod sdf_volume;
 pub mod prelude {
     pub use crate::backwars_compatibility::*;
     pub use crate::{
-        DefaultMeshMaterial, FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
+        FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
@@ -153,13 +109,6 @@ impl Default for MeshBudget {
         }
     }
 }
-
-/// Optional default material applied to entities receiving their first mesh.
-///
-/// If not inserted, entities get `Mesh3d` only — the user is responsible
-/// for adding their own material component.
-#[derive(Resource, Deref)]
-pub struct DefaultMeshMaterial(pub Handle<StandardMaterial>);
 
 /// Extension trait for registering sculptable field types.
 ///
@@ -354,7 +303,6 @@ fn dispatch_mesh_tasks<F, T>(
 fn receive_mesh_results(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    default_material: Option<Res<DefaultMeshMaterial>>,
     mut pending: Query<(Entity, &mut MeshTaskPending)>,
     existing_meshes: Query<&Mesh3d>,
 ) {
@@ -375,15 +323,6 @@ fn receive_mesh_results(
         if let Some(mesh) = result {
             let mesh_handle = meshes.add(mesh);
             commands.entity(entity).insert(Mesh3d(mesh_handle));
-
-            // First mesh — apply default material if provided
-            if existing_meshes.get(entity).is_err() {
-                if let Some(ref mat) = default_material {
-                    commands
-                        .entity(entity)
-                        .insert(MeshMaterial3d(mat.0.clone()));
-                }
-            }
         }
 
         commands.entity(entity).remove::<MeshTaskPending>();
