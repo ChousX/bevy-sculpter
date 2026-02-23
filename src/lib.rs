@@ -51,7 +51,7 @@ pub use crate::{
     prelude::{GenerateMesh, SdfVolume},
 };
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use chunky_bevy::ChunkyPlugin;
 pub use chunky_bevy::prelude::{Chunk, ChunkManager, ChunkPosition};
 
@@ -69,7 +69,7 @@ pub mod sdf_volume;
 pub mod prelude {
     pub use crate::backwars_compatibility::*;
     pub use crate::{
-        FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
+        DefaultMeshMaterial, FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
@@ -108,8 +108,9 @@ impl Plugin for SurfaceNetsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ChunkyPlugin)
             .init_resource::<MeshSize>()
-            // Propagate GenerateMesh from parent chunks to all children
-            .add_systems(Update, propagate_generate_mesh_to_children);
+            .init_resource::<MeshBudget>()
+            .add_systems(Update, propagate_generate_mesh_to_children)
+            .add_systems(Update, receive_mesh_results);
     }
 }
 
@@ -131,8 +132,11 @@ fn propagate_generate_mesh_to_children(
 }
 
 /// Marker for an in-flight async mesh generation task.
+///
+/// Uses `Option` so we can `.take()` the task to avoid double-polling
+/// while waiting for deferred command removal.
 #[derive(Component)]
-struct MeshTaskPending(Task<Option<Mesh>>);
+struct MeshTaskPending(Option<Task<Option<Mesh>>>);
 
 /// Controls how many mesh tasks can be dispatched per frame.
 /// Prevents frame spikes when many chunks need remeshing simultaneously.
@@ -149,6 +153,13 @@ impl Default for MeshBudget {
         }
     }
 }
+
+/// Optional default material applied to entities receiving their first mesh.
+///
+/// If not inserted, entities get `Mesh3d` only — the user is responsible
+/// for adding their own material component.
+#[derive(Resource, Deref)]
+pub struct DefaultMeshMaterial(pub Handle<StandardMaterial>);
 
 /// Extension trait for registering sculptable field types.
 ///
@@ -184,25 +195,19 @@ impl SurfaceNetsExt for App {
         F: sculptable::Sculptable<T> + Component + Clone + Send + Sync + 'static,
         T: IsoConvertible + Copy + Default + Send + Sync + 'static,
     {
-        // Ensure MeshBudget resource exists
-        self.init_resource::<MeshBudget>();
-
         #[cfg(feature = "auto-mesh")]
         self.add_systems(
             Update,
             auto_mark_changed::<F, T>.before(propagate_generate_mesh_to_children),
         );
 
-        // Mesh generation pipeline: gather → dispatch (async) → receive
+        // Mesh generation pipeline: gather → dispatch (async)
         self.add_systems(
             Update,
             (gather_neighbor_fields::<F, T>, dispatch_mesh_tasks::<F, T>)
                 .chain()
                 .after(propagate_generate_mesh_to_children),
         );
-
-        // Receive runs independently — polls completed tasks every frame
-        self.add_systems(Update, receive_mesh_results);
 
         self
     }
@@ -302,7 +307,7 @@ fn gather_neighbor_fields<F, T>(
     }
 }
 
-// Dispatch mesh generation to the async compute thread pool.
+/// Dispatch mesh generation to the async compute thread pool.
 ///
 /// Clones field + neighbor data, spawns a background task, and attaches
 /// a `MeshTaskPending` component. The entity keeps its field data intact.
@@ -339,14 +344,11 @@ fn dispatch_mesh_tasks<F, T>(
             .entity(entity)
             .remove::<GenerateMesh>()
             .remove::<NeighborFields<T>>()
-            .insert(MeshTaskPending(task));
+            .insert(MeshTaskPending(Some(task)));
 
         dispatched += 1;
     }
 }
-
-#[derive(Resource, Deref)]
-pub struct DefaultMeshMaterial(pub Handle<StandardMaterial>);
 
 /// Poll completed mesh tasks and insert the generated meshes.
 fn receive_mesh_results(
@@ -357,16 +359,24 @@ fn receive_mesh_results(
     existing_meshes: Query<&Mesh3d>,
 ) {
     for (entity, mut task) in pending.iter_mut() {
-        // Non-blocking poll — returns Some if the task is done
-        let Some(result) = block_on(poll_once(&mut task.0)) else {
-            continue; // Still computing
+        // Already taken on a previous frame, waiting for deferred remove
+        let Some(ref inner) = task.0 else {
+            continue;
         };
+
+        if !inner.is_finished() {
+            continue;
+        }
+
+        // Take the task out so it can never be polled again
+        let inner = task.0.take().unwrap();
+        let result = block_on(inner);
 
         if let Some(mesh) = result {
             let mesh_handle = meshes.add(mesh);
             commands.entity(entity).insert(Mesh3d(mesh_handle));
 
-            // Only add a default material on first mesh if one was provided
+            // First mesh — apply default material if provided
             if existing_meshes.get(entity).is_err() {
                 if let Some(ref mat) = default_material {
                     commands
@@ -376,10 +386,10 @@ fn receive_mesh_results(
             }
         }
 
-        // Clean up — remove the task component whether mesh was generated or not
         commands.entity(entity).remove::<MeshTaskPending>();
     }
 }
+
 // Implement Sculptable for SdfVolume
 impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {}
 

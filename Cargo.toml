@@ -22,7 +22,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
 
 [features]
 # Default to a native dev build.
-default = []
+default = ["dev_native"]
 
 dev = [
     # Improve compile times for dev builds by linking Bevy as a dynamic library.
@@ -31,6 +31,7 @@ dev = [
     "bevy/bevy_ui_debug",
     # Improve error messages coming from Bevy
     "bevy/track_location",
+    "bevy/debug",
 ]
 dev_native = [
     "dev",

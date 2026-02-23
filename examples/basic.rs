@@ -17,7 +17,7 @@ fn main() {
         .add_plugins(SurfaceNetsPlugin)
         .register_sculptable::<SdfVolume, f32>()
         .insert_resource(MeshSize(vec3(10., 10., 10.)))
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup_default_mesh_material, setup).chain())
         .add_systems(Update, fly_camera)
         .run();
 }
@@ -39,6 +39,22 @@ impl Default for FlyCam {
             yaw: 0.0,
         }
     }
+}
+
+fn setup_default_mesh_material(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    existing: Option<Res<DefaultMeshMaterial>>,
+) {
+    // Don't overwrite if user already inserted one
+    if existing.is_some() {
+        return;
+    }
+    commands.insert_resource(DefaultMeshMaterial(materials.add(StandardMaterial {
+        base_color: Color::srgb(0.5, 0.7, 0.5),
+        perceptual_roughness: 0.8,
+        ..default()
+    })));
 }
 
 fn setup(mut commands: Commands, _mesh_size: Res<MeshSize>) {
