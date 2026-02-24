@@ -81,6 +81,19 @@ impl LodLevel {
     }
 }
 
+/// Marker component: entity always meshes at full resolution, ignoring parent LodLevel.
+///
+/// Place this on a **child field entity** (not the chunk). When mesh generation
+/// runs, fields with this marker will use step 1 regardless of the chunk's LOD.
+///
+/// # Example
+///
+/// ```ignore
+/// commands.spawn((DomainField::new(), IgnoreLod));
+/// ```
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct IgnoreLod;
+
 /// Plugin that enables Surface Nets mesh generation.
 ///
 /// This plugin sets up the core infrastructure including `GenerateMesh` propagation
@@ -300,7 +313,7 @@ fn gather_neighbor_fields<F, T>(
 fn dispatch_mesh_tasks<F, T>(
     mut commands: Commands,
     pending: Query<
-        (Entity, &F, &NeighborFields<T>, &ChildOf),
+        (Entity, &F, &NeighborFields<T>, &ChildOf, Has<IgnoreLod>),
         (With<GenerateMesh>, Without<MeshTaskPending>),
     >,
     chunk_lods: Query<Option<&LodLevel>, With<Chunk>>,
@@ -314,20 +327,22 @@ fn dispatch_mesh_tasks<F, T>(
     let ms = mesh_size.0;
 
     let mut dispatched = 0;
-    for (entity, field, neighbors, child_of) in pending.iter() {
+    for (entity, field, neighbors, child_of, ignore_lod) in pending.iter() {
         if dispatched >= budget.max_dispatches_per_frame {
             break;
         }
 
-        // Read LOD from parent chunk, default to 0
-        let step = chunk_lods
-            .get(child_of.parent())
-            .ok()
-            .flatten()
-            .map(|lod| lod.step())
-            .unwrap_or(1);
+        let step = if ignore_lod {
+            1
+        } else {
+            chunk_lods
+                .get(child_of.parent())
+                .ok()
+                .flatten()
+                .map(|lod| lod.step())
+                .unwrap_or(1)
+        };
 
-        // Clone data for the background task
         let field_clone = field.clone();
         let neighbors_clone = neighbors.clone();
 
@@ -344,7 +359,6 @@ fn dispatch_mesh_tasks<F, T>(
         dispatched += 1;
     }
 }
-
 /// Poll completed mesh tasks and insert the generated meshes.
 fn receive_mesh_results(
     mut commands: Commands,
