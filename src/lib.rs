@@ -25,7 +25,7 @@ pub mod sdf_volume;
 pub mod prelude {
     pub use crate::backwars_compatibility::*;
     pub use crate::{
-        FIELD_SIZE, FIELD_VOLUME, LodLevel, SurfaceNetsExt, SurfaceNetsPlugin,
+        FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
         field_csg::{CsgOp, FieldCsg, IsoConvertible},
         mesher::MeshSize,
@@ -46,7 +46,6 @@ pub const FIELD_VOLUME: usize = (FIELD_SIZE.x * FIELD_SIZE.y * FIELD_SIZE.z) as 
 
 /// Sentinel value indicating no vertex exists at a position.
 pub const NULL_VERTEX: u32 = u32::MAX;
-
 /// Level of detail for mesh generation.
 ///
 /// Controls the sampling stride through the SDF field. The step size
@@ -56,19 +55,17 @@ pub const NULL_VERTEX: u32 = u32::MAX;
 /// - Level 2 = step 4 (quarter resolution, 8³)
 /// - Level 3 = step 8 (eighth resolution, 4³)
 ///
-/// Place this on a **chunk entity** (parent). When mesh generation is
-/// triggered, the LOD level propagates to child field entities automatically.
+/// Place this on a **field entity** (child). Each field can have its own
+/// LOD level, allowing different fields on the same chunk to mesh at
+/// different resolutions.
 ///
 /// If absent, defaults to level 0 (full resolution).
 ///
 /// # Example
 ///
 /// ```ignore
-/// commands.spawn((
-///     Chunk,
-///     ChunkPosition(ivec3(0, 0, 0)),
-///     LodLevel(2), // quarter resolution
-/// ));
+/// // TopologyField gets LOD from the system; DomainField stays at 0
+/// commands.spawn((TopologyField::default(), LodLevel(2)));
 /// ```
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LodLevel(pub u8);
@@ -310,13 +307,13 @@ fn gather_neighbor_fields<F, T>(
 ///
 /// Reads `LodLevel` from the parent chunk to determine the sampling step.
 /// If no `LodLevel` is present, defaults to full resolution (step 1).
+
 fn dispatch_mesh_tasks<F, T>(
     mut commands: Commands,
     pending: Query<
-        (Entity, &F, &NeighborFields<T>, &ChildOf, Has<IgnoreLod>),
+        (Entity, &F, &NeighborFields<T>, Option<&LodLevel>),
         (With<GenerateMesh>, Without<MeshTaskPending>),
     >,
-    chunk_lods: Query<Option<&LodLevel>, With<Chunk>>,
     mesh_size: Res<MeshSize>,
     budget: Res<MeshBudget>,
 ) where
@@ -327,21 +324,12 @@ fn dispatch_mesh_tasks<F, T>(
     let ms = mesh_size.0;
 
     let mut dispatched = 0;
-    for (entity, field, neighbors, child_of, ignore_lod) in pending.iter() {
+    for (entity, field, neighbors, lod) in pending.iter() {
         if dispatched >= budget.max_dispatches_per_frame {
             break;
         }
 
-        let step = if ignore_lod {
-            1
-        } else {
-            chunk_lods
-                .get(child_of.parent())
-                .ok()
-                .flatten()
-                .map(|lod| lod.step())
-                .unwrap_or(1)
-        };
+        let step = lod.map(|l| l.step()).unwrap_or(1);
 
         let field_clone = field.clone();
         let neighbors_clone = neighbors.clone();
@@ -359,12 +347,12 @@ fn dispatch_mesh_tasks<F, T>(
         dispatched += 1;
     }
 }
+
 /// Poll completed mesh tasks and insert the generated meshes.
 fn receive_mesh_results(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut pending: Query<(Entity, &mut MeshTaskPending)>,
-    existing_meshes: Query<&Mesh3d>,
 ) {
     for (entity, mut task) in pending.iter_mut() {
         // Already taken on a previous frame, waiting for deferred remove
