@@ -4,7 +4,7 @@
 //! Allows combining fields with different storage types (f32, bool, u8, etc.)
 //! by converting through a common signed distance representation via [`IsoConvertible`].
 
-use crate::field::Field;
+use crate::field::{Field, smooth_max, smooth_min};
 use bevy::prelude::*;
 
 // ============================================================================
@@ -56,6 +56,7 @@ impl IsoConvertible for u8 {
 }
 
 impl IsoConvertible for i8 {
+    #[inline]
     fn to_iso(self) -> f32 {
         if self >= 0 {
             self as f32 / 127.0
@@ -64,6 +65,7 @@ impl IsoConvertible for i8 {
         }
     }
 
+    #[inline]
     fn from_iso(iso: f32) -> Self {
         let clamped = iso.clamp(-1.0, 1.0);
         if clamped >= 0.0 {
@@ -272,28 +274,6 @@ pub trait FieldCsg<Ta: IsoConvertible>: Field<Ta> {
 }
 
 impl<Ta: IsoConvertible, F: Field<Ta>> FieldCsg<Ta> for F {}
-
-// ============================================================================
-// Smooth min/max helpers
-// ============================================================================
-
-#[inline]
-fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
-    if k <= 0.0 {
-        return a.min(b);
-    }
-    let h = (k - (a - b).abs()).max(0.0) / k;
-    a.min(b) - h * h * k * 0.25
-}
-
-#[inline]
-fn smooth_max(a: f32, b: f32, k: f32) -> f32 {
-    -smooth_min(-a, -b, k)
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

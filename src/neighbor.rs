@@ -9,8 +9,17 @@
 use crate::prelude::*;
 use bevy::prelude::*;
 
-/// How many planes of neighbor data to store.
+/// Default neighbor depth when no LOD is specified.
 pub const NEIGHBOR_DEPTH: u32 = 2;
+
+/// Compute the neighbor depth needed for a given LOD step.
+///
+/// The mesher samples corners at `pos + step`, so we need `step + 1`
+/// planes of neighbor data to cover all possible samples.
+#[inline]
+pub fn neighbor_depth_for_step(step: u32) -> u32 {
+    step + 1
+}
 
 // Face neighbors (6)
 /// Identifies a face of a chunk for neighbor lookups.
@@ -501,17 +510,17 @@ pub struct NeighborSlice<T> {
 
 impl<T: Copy + Default> NeighborSlice<T> {
     /// Creates a slice by sampling with a given function.
-    pub fn from_sampler<F>(face: NeighborFace, field_size: UVec3, sampler: F) -> Self
+    pub fn from_sampler<F>(face: NeighborFace, field_size: UVec3, depth: u32, sampler: F) -> Self
     where
         F: Fn(u32, u32, u32) -> T,
     {
         let (size_a, size_b) = face.slice_dimensions(field_size);
-        let mut data = Vec::with_capacity((size_a * size_b * NEIGHBOR_DEPTH) as usize);
+        let mut data = Vec::with_capacity((size_a * size_b * depth) as usize);
 
-        for depth in 0..NEIGHBOR_DEPTH {
+        for d in 0..depth {
             for b in 0..size_b {
                 for a in 0..size_a {
-                    data.push(sampler(a, b, depth));
+                    data.push(sampler(a, b, d));
                 }
             }
         }
@@ -520,14 +529,23 @@ impl<T: Copy + Default> NeighborSlice<T> {
             data,
             size_a,
             size_b,
-            depth: NEIGHBOR_DEPTH,
+            depth,
         }
     }
 
-    /// Creates a slice from a field, extracting raw values.
+    /// Creates a slice from a field with the default depth.
     pub fn from_field<F: Field<T> + ?Sized>(field: &F, face: NeighborFace) -> Self {
-        Self::from_sampler(face, F::SIZE, |a, b, depth| {
-            let (x, y, z) = face.to_field_coords(a, b, depth, F::SIZE);
+        Self::from_field_with_depth(field, face, NEIGHBOR_DEPTH)
+    }
+
+    /// Creates a slice from a field with a specific depth.
+    pub fn from_field_with_depth<F: Field<T> + ?Sized>(
+        field: &F,
+        face: NeighborFace,
+        depth: u32,
+    ) -> Self {
+        Self::from_sampler(face, F::SIZE, depth, |a, b, d| {
+            let (x, y, z) = face.to_field_coords(a, b, d, F::SIZE);
             field.get(x, y, z)
         })
     }
@@ -546,22 +564,32 @@ impl<T: Copy + Default> NeighborSlice<T> {
 
 /// Edge neighbor data: a 1D strip with depth in two axes.
 ///
-/// Layout: `data[a + depth_u * axis_len + depth_v * axis_len * NEIGHBOR_DEPTH]`
+/// Layout: `data[a + depth_u * axis_len + depth_v * axis_len * depth]`
 #[derive(Clone, Debug)]
 pub struct NeighborEdgeSlice<T> {
     pub data: Vec<T>,
     pub axis_len: u32,
+    pub depth: u32,
 }
 
 impl<T: Copy + Default> NeighborEdgeSlice<T> {
-    /// Creates an edge slice from a field.
+    /// Creates an edge slice from a field with the default depth.
     pub fn from_field<F: Field<T> + ?Sized>(field: &F, edge: NeighborEdge) -> Self {
+        Self::from_field_with_depth(field, edge, NEIGHBOR_DEPTH)
+    }
+
+    /// Creates an edge slice from a field with a specific depth.
+    pub fn from_field_with_depth<F: Field<T> + ?Sized>(
+        field: &F,
+        edge: NeighborEdge,
+        depth: u32,
+    ) -> Self {
         let axis_len = edge.axis_length(F::SIZE);
-        let cap = (axis_len * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize;
+        let cap = (axis_len * depth * depth) as usize;
         let mut data = Vec::with_capacity(cap);
 
-        for dv in 0..NEIGHBOR_DEPTH {
-            for du in 0..NEIGHBOR_DEPTH {
+        for dv in 0..depth {
+            for du in 0..depth {
                 for a in 0..axis_len {
                     let (x, y, z) = edge.to_field_coords(a, du, dv, F::SIZE);
                     data.push(field.get(x, y, z));
@@ -569,15 +597,18 @@ impl<T: Copy + Default> NeighborEdgeSlice<T> {
             }
         }
 
-        Self { data, axis_len }
+        Self {
+            data,
+            axis_len,
+            depth,
+        }
     }
 
     /// Gets the value at (a, depth_u, depth_v) coordinates.
     #[inline]
     pub fn get(&self, a: u32, depth_u: u32, depth_v: u32) -> T {
-        if a < self.axis_len && depth_u < NEIGHBOR_DEPTH && depth_v < NEIGHBOR_DEPTH {
-            let idx =
-                (a + depth_u * self.axis_len + depth_v * self.axis_len * NEIGHBOR_DEPTH) as usize;
+        if a < self.axis_len && depth_u < self.depth && depth_v < self.depth {
+            let idx = (a + depth_u * self.axis_len + depth_v * self.axis_len * self.depth) as usize;
             self.data[idx]
         } else {
             T::default()
@@ -585,35 +616,45 @@ impl<T: Copy + Default> NeighborEdgeSlice<T> {
     }
 }
 
-/// Corner neighbor data: a small NEIGHBOR_DEPTH³ cube.
+/// Corner neighbor data: a small depth³ cube.
 #[derive(Clone, Debug)]
 pub struct NeighborCornerSlice<T> {
     pub data: Vec<T>,
+    pub depth: u32,
 }
 
 impl<T: Copy + Default> NeighborCornerSlice<T> {
-    /// Creates a corner slice from a field.
+    /// Creates a corner slice from a field with the default depth.
     pub fn from_field<F: Field<T> + ?Sized>(field: &F, corner: NeighborCorner) -> Self {
-        let cap = (NEIGHBOR_DEPTH * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize;
+        Self::from_field_with_depth(field, corner, NEIGHBOR_DEPTH)
+    }
+
+    /// Creates a corner slice from a field with a specific depth.
+    pub fn from_field_with_depth<F: Field<T> + ?Sized>(
+        field: &F,
+        corner: NeighborCorner,
+        depth: u32,
+    ) -> Self {
+        let cap = (depth * depth * depth) as usize;
         let mut data = Vec::with_capacity(cap);
 
-        for dz in 0..NEIGHBOR_DEPTH {
-            for dy in 0..NEIGHBOR_DEPTH {
-                for dx in 0..NEIGHBOR_DEPTH {
+        for dz in 0..depth {
+            for dy in 0..depth {
+                for dx in 0..depth {
                     let (x, y, z) = corner.to_field_coords(dx, dy, dz, F::SIZE);
                     data.push(field.get(x, y, z));
                 }
             }
         }
 
-        Self { data }
+        Self { data, depth }
     }
 
     /// Gets the value at (depth_x, depth_y, depth_z) coordinates.
     #[inline]
     pub fn get(&self, dx: u32, dy: u32, dz: u32) -> T {
-        if dx < NEIGHBOR_DEPTH && dy < NEIGHBOR_DEPTH && dz < NEIGHBOR_DEPTH {
-            let idx = (dx + dy * NEIGHBOR_DEPTH + dz * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize;
+        if dx < self.depth && dy < self.depth && dz < self.depth {
+            let idx = (dx + dy * self.depth + dz * self.depth * self.depth) as usize;
             self.data[idx]
         } else {
             T::default()
@@ -636,11 +677,9 @@ pub struct NeighborFields<T: Copy + Default + Send + Sync + 'static> {
 impl<T: Copy + Default + Send + Sync + 'static> Default for NeighborFields<T> {
     fn default() -> Self {
         Self {
-            neighbors: Default::default(),
-            edges: [
-                None, None, None, None, None, None, None, None, None, None, None, None,
-            ],
-            corners: [None, None, None, None, None, None, None, None],
+            neighbors: [const { None }; 6],
+            edges: [const { None }; 12],
+            corners: [const { None }; 8],
         }
     }
 }
@@ -673,10 +712,6 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
         result
     }
 
-    /// Sample a raw value at the given voxel coordinate.
-    ///
-    /// Checks faces first, then edges, then corners. Returns `Some(value)` if
-    /// the voxel is in any neighbor's region and data exists.
     #[inline]
     pub fn sample(&self, voxel: IVec3, field_size: IVec3) -> Option<T> {
         // Classify how many axes are out of bounds
@@ -705,42 +740,60 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
         let oob_count = (oob_x != 0) as u8 + (oob_y != 0) as u8 + (oob_z != 0) as u8;
 
         match oob_count {
-            0 => None, // In bounds — caller should use the field directly
+            0 => None,
             1 => {
-                // Face neighbor
-                for face in NeighborFace::ALL {
-                    if let Some((a, b, depth)) = face.voxel_to_slice_coords(voxel, field_size) {
-                        if let Some(ref slice) = self.neighbors[face as usize] {
-                            return Some(slice.get(a, b, depth));
-                        }
-                        return None; // Right face but no data
-                    }
-                }
-                None
+                // Directly determine which face from the OOB axis
+                let face = match (oob_x, oob_y, oob_z) {
+                    (-1, 0, 0) => NeighborFace::NegX,
+                    (1, 0, 0) => NeighborFace::PosX,
+                    (0, -1, 0) => NeighborFace::NegY,
+                    (0, 1, 0) => NeighborFace::PosY,
+                    (0, 0, -1) => NeighborFace::NegZ,
+                    (0, 0, 1) => NeighborFace::PosZ,
+                    _ => return None,
+                };
+                let (a, b, depth) = face.voxel_to_slice_coords(voxel, field_size)?;
+                self.neighbors[face as usize]
+                    .as_ref()
+                    .map(|slice| slice.get(a, b, depth))
             }
             2 => {
-                // Edge neighbor
-                for edge in NeighborEdge::ALL {
-                    if let Some((a, du, dv)) = edge.voxel_to_edge_coords(voxel, field_size) {
-                        if let Some(ref slice) = self.edges[edge as usize] {
-                            return Some(slice.get(a, du, dv));
-                        }
-                        return None;
-                    }
-                }
-                None
+                let edge = match (oob_x, oob_y, oob_z) {
+                    (-1, -1, 0) => NeighborEdge::NegXNegY,
+                    (-1, 1, 0) => NeighborEdge::NegXPosY,
+                    (1, -1, 0) => NeighborEdge::PosXNegY,
+                    (1, 1, 0) => NeighborEdge::PosXPosY,
+                    (-1, 0, -1) => NeighborEdge::NegXNegZ,
+                    (-1, 0, 1) => NeighborEdge::NegXPosZ,
+                    (1, 0, -1) => NeighborEdge::PosXNegZ,
+                    (1, 0, 1) => NeighborEdge::PosXPosZ,
+                    (0, -1, -1) => NeighborEdge::NegYNegZ,
+                    (0, -1, 1) => NeighborEdge::NegYPosZ,
+                    (0, 1, -1) => NeighborEdge::PosYNegZ,
+                    (0, 1, 1) => NeighborEdge::PosYPosZ,
+                    _ => return None,
+                };
+                let (a, du, dv) = edge.voxel_to_edge_coords(voxel, field_size)?;
+                self.edges[edge as usize]
+                    .as_ref()
+                    .map(|slice| slice.get(a, du, dv))
             }
             3 => {
-                // Corner neighbor
-                for corner in NeighborCorner::ALL {
-                    if let Some((dx, dy, dz)) = corner.voxel_to_corner_coords(voxel, field_size) {
-                        if let Some(ref slice) = self.corners[corner as usize] {
-                            return Some(slice.get(dx, dy, dz));
-                        }
-                        return None;
-                    }
-                }
-                None
+                let corner = match (oob_x, oob_y, oob_z) {
+                    (-1, -1, -1) => NeighborCorner::NegXNegYNegZ,
+                    (1, -1, -1) => NeighborCorner::PosXNegYNegZ,
+                    (-1, 1, -1) => NeighborCorner::NegXPosYNegZ,
+                    (1, 1, -1) => NeighborCorner::PosXPosYNegZ,
+                    (-1, -1, 1) => NeighborCorner::NegXNegYPosZ,
+                    (1, -1, 1) => NeighborCorner::PosXNegYPosZ,
+                    (-1, 1, 1) => NeighborCorner::NegXPosYPosZ,
+                    (1, 1, 1) => NeighborCorner::PosXPosYPosZ,
+                    _ => return None,
+                };
+                let (dx, dy, dz) = corner.voxel_to_corner_coords(voxel, field_size)?;
+                self.corners[corner as usize]
+                    .as_ref()
+                    .map(|slice| slice.get(dx, dy, dz))
             }
             _ => None,
         }
@@ -800,17 +853,14 @@ mod tests {
     fn test_edge_coords() {
         let size = ivec3(32, 32, 32);
 
-        // NegX, NegY edge: x < 0, y < 0, z in bounds
         assert_eq!(
             NeighborEdge::NegXNegY.voxel_to_edge_coords(ivec3(-1, -1, 5), size),
             Some((5, 0, 0))
         );
-        // Not an edge case (only 1 axis OOB)
         assert_eq!(
             NeighborEdge::NegXNegY.voxel_to_edge_coords(ivec3(-1, 5, 5), size),
             None
         );
-        // PosX, PosY edge
         assert_eq!(
             NeighborEdge::PosXPosY.voxel_to_edge_coords(ivec3(32, 32, 10), size),
             Some((10, 0, 0))
@@ -829,7 +879,6 @@ mod tests {
             NeighborCorner::PosXPosYPosZ.voxel_to_corner_coords(ivec3(32, 32, 32), size),
             Some((0, 0, 0))
         );
-        // Not a corner (only 2 axes OOB)
         assert_eq!(
             NeighborCorner::NegXNegYNegZ.voxel_to_corner_coords(ivec3(-1, -1, 5), size),
             None
@@ -843,6 +892,7 @@ mod tests {
         fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
             NeighborFace::PosX,
             uvec3(32, 32, 32),
+            NEIGHBOR_DEPTH,
             |_, _, _| -0.5,
         ));
 
@@ -860,6 +910,7 @@ mod tests {
         fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
             NeighborFace::PosX,
             uvec3(32, 32, 32),
+            NEIGHBOR_DEPTH,
             |_, _, _| true,
         ));
 
@@ -875,15 +926,13 @@ mod tests {
         let size = ivec3(32, 32, 32);
         let mut fields: NeighborFields<f32> = NeighborFields::default();
 
-        // Insert edge data for PosX+PosY
         fields.edges[NeighborEdge::PosXPosY as usize] = Some(NeighborEdgeSlice {
             data: vec![-0.75; (32 * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize],
             axis_len: 32,
+            depth: NEIGHBOR_DEPTH,
         });
 
-        // Voxel at (32, 32, 10) — 2 axes OOB → edge
         assert_eq!(fields.sample(ivec3(32, 32, 10), size), Some(-0.75));
-        // Voxel at (32, 5, 5) — 1 axis OOB → face (no face data)
         assert_eq!(fields.sample(ivec3(32, 5, 5), size), None);
     }
 
@@ -894,11 +943,33 @@ mod tests {
 
         fields.corners[NeighborCorner::PosXPosYPosZ as usize] = Some(NeighborCornerSlice {
             data: vec![-0.25; (NEIGHBOR_DEPTH * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize],
+            depth: NEIGHBOR_DEPTH,
         });
 
-        // All 3 axes OOB → corner
         assert_eq!(fields.sample(ivec3(32, 32, 32), size), Some(-0.25));
-        // Only 2 axes OOB → edge (no edge data)
         assert_eq!(fields.sample(ivec3(32, 32, 10), size), None);
+    }
+
+    #[test]
+    fn test_lod_aware_depth() {
+        // At LOD 1 (step=2), depth should be 3 to cover samples at offset +2
+        let depth = neighbor_depth_for_step(2);
+        assert_eq!(depth, 3);
+
+        let size = ivec3(32, 32, 32);
+        let mut fields: NeighborFields<f32> = NeighborFields::default();
+
+        // Create face slice with depth=3
+        fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
+            NeighborFace::PosX,
+            uvec3(32, 32, 32),
+            depth,
+            |_, _, _| -0.5,
+        ));
+
+        // Depth index 2 (i.e. voxel 34) should now be reachable
+        assert_eq!(fields.sample(ivec3(34, 5, 5), size), Some(-0.5));
+        // Depth index 0 still works
+        assert_eq!(fields.sample(ivec3(32, 5, 5), size), Some(-0.5));
     }
 }

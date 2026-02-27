@@ -69,23 +69,7 @@ pub fn fill_centered_sphere(volume: &mut SdfVolume, radius: f32) {
 /// * `center` - Brush center in grid coordinates
 /// * `radius` - Brush radius in grid units
 /// * `add` - If `true`, adds material (CSG union); if `false`, removes (CSG subtract)
-///
-/// # Example
-///
-/// ```
-/// use bevy::prelude::*;
-/// use bevy_sculpter::prelude::*;
-/// use bevy_sculpter::helpers::brush_sphere;
-///
-/// let mut volume = SdfVolume::new();
-///
-/// // Add a sphere
-/// brush_sphere(&mut volume, vec3(16.0, 16.0, 16.0), 8.0, true);
-///
-/// // Carve out a smaller sphere
-/// brush_sphere(&mut volume, vec3(20.0, 16.0, 16.0), 4.0, false);
-/// ```
-pub fn brush_sphere(volume: &mut SdfVolume, center: Vec3, radius: f32, add: bool) {
+pub fn brush_sphere(volume: &mut impl Field<f32>, center: Vec3, radius: f32, add: bool) {
     let min = (center - Vec3::splat(radius + 1.0))
         .max(Vec3::ZERO)
         .as_ivec3();
@@ -122,21 +106,8 @@ pub fn brush_sphere(volume: &mut SdfVolume, center: Vec3, radius: f32, add: bool
 /// * `radius` - Brush radius in grid units
 /// * `strength` - How much to change per application (positive = remove, negative = add)
 /// * `falloff` - Falloff curve power (1.0 = linear, 2.0 = quadratic, etc.)
-///
-/// # Example
-///
-/// ```
-/// use bevy::prelude::*;
-/// use bevy_sculpter::prelude::*;
-/// use bevy_sculpter::helpers::brush_smooth;
-///
-/// let mut volume = SdfVolume::new();
-///
-/// // Gently add material with quadratic falloff
-/// brush_smooth(&mut volume, vec3(16.0, 16.0, 16.0), 5.0, -0.5, 2.0);
-/// ```
 pub fn brush_smooth(
-    volume: &mut SdfVolume,
+    volume: &mut impl Field<f32>,
     center: Vec3,
     radius: f32,
     strength: f32,
@@ -185,7 +156,7 @@ pub fn brush_smooth(
 /// * `delta_time` - Time since last frame in seconds
 /// * `falloff` - Falloff curve power (1.0 = linear, 2.0 = quadratic)
 pub fn brush_smooth_timed(
-    volume: &mut SdfVolume,
+    volume: &mut impl Field<f32>,
     center: Vec3,
     radius: f32,
     rate: f32,
@@ -207,7 +178,7 @@ pub fn brush_smooth_timed(
 /// * `strength` - How strongly to push toward target (0.0-1.0 typical)
 /// * `falloff` - Falloff curve power
 pub fn brush_flatten(
-    volume: &mut SdfVolume,
+    volume: &mut impl Field<f32>,
     center: Vec3,
     radius: f32,
     target_height: f32,
@@ -254,7 +225,13 @@ pub fn brush_flatten(
 /// * `radius` - Brush radius in grid units
 /// * `strength` - Blend factor toward average (0.0-1.0)
 /// * `falloff` - Falloff curve power
-pub fn brush_blur(volume: &mut SdfVolume, center: Vec3, radius: f32, strength: f32, falloff: f32) {
+pub fn brush_blur(
+    volume: &mut impl Field<f32>,
+    center: Vec3,
+    radius: f32,
+    strength: f32,
+    falloff: f32,
+) {
     let min = (center - Vec3::splat(radius + 1.0))
         .max(Vec3::ZERO)
         .as_ivec3();

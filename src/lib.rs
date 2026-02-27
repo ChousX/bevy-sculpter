@@ -23,7 +23,7 @@ pub mod sdf_volume;
 
 /// Common imports for working with bevy-sculpter.
 pub mod prelude {
-    pub use crate::backwars_compatibility::*;
+    pub use crate::backwards_compatibility::*;
     pub use crate::{
         FIELD_SIZE, FIELD_VOLUME, SurfaceNetsExt, SurfaceNetsPlugin,
         field::Field,
@@ -227,12 +227,16 @@ fn auto_mark_changed<F, T>(
 /// 2. Traverses `ChildOf` to get parent chunk's `ChunkPos`
 /// 3. Gathers neighbor data from children of neighboring chunks with same `F` component
 /// 4. Stores raw `T` values (conversion to iso happens during meshing)
+/// 5. Uses the entity's `LodLevel` to determine neighbor depth
 ///
 /// Gathers all 26 neighbors: 6 faces, 12 edges, 8 corners.
 fn gather_neighbor_fields<F, T>(
     mut commands: Commands,
     // Children that need meshing (no neighbor data yet)
-    pending: Query<(Entity, &ChildOf), (With<F>, With<GenerateMesh>, Without<NeighborFields<T>>)>,
+    pending: Query<
+        (Entity, &ChildOf, Option<&LodLevel>),
+        (With<F>, With<GenerateMesh>, Without<NeighborFields<T>>),
+    >,
     // Parent chunks with position
     chunks: Query<&ChunkPosition, With<Chunk>>,
     // All fields of this type (to find in neighbor chunks' children)
@@ -245,11 +249,14 @@ fn gather_neighbor_fields<F, T>(
     F: sculptable::Sculptable<T> + Component,
     T: IsoConvertible + Send + Sync + 'static,
 {
-    for (entity, child_of) in pending.iter() {
+    for (entity, child_of, lod) in pending.iter() {
         // Get parent chunk's position
         let Ok(chunk_pos) = chunks.get(child_of.parent()) else {
             continue;
         };
+
+        let step = lod.map(|l| l.step()).unwrap_or(1);
+        let depth = neighbor::neighbor_depth_for_step(step);
 
         let mut neighbor_fields = NeighborFields::<T>::default();
 
@@ -257,10 +264,7 @@ fn gather_neighbor_fields<F, T>(
         let find_field = |pos: IVec3| -> Option<Entity> {
             let chunk = chunk_manager.get_chunk(&pos)?;
             let children = children_query.get(chunk).ok()?;
-            children
-                .iter()
-                .find(|child| all_fields.get(*child).is_ok())
-                .take()
+            children.iter().find(|child| all_fields.get(*child).is_ok())
         };
 
         // 6 face neighbors
@@ -269,7 +273,7 @@ fn gather_neighbor_fields<F, T>(
             if let Some(child) = find_field(neighbor_pos) {
                 if let Ok(field) = all_fields.get(child) {
                     neighbor_fields.neighbors[face as usize] =
-                        Some(NeighborSlice::from_field(field, face));
+                        Some(NeighborSlice::from_field_with_depth(field, face, depth));
                 }
             }
         }
@@ -280,7 +284,7 @@ fn gather_neighbor_fields<F, T>(
             if let Some(child) = find_field(neighbor_pos) {
                 if let Ok(field) = all_fields.get(child) {
                     neighbor_fields.edges[edge as usize] =
-                        Some(NeighborEdgeSlice::from_field(field, edge));
+                        Some(NeighborEdgeSlice::from_field_with_depth(field, edge, depth));
                 }
             }
         }
@@ -290,8 +294,9 @@ fn gather_neighbor_fields<F, T>(
             let neighbor_pos = chunk_pos.0 + corner.offset();
             if let Some(child) = find_field(neighbor_pos) {
                 if let Ok(field) = all_fields.get(child) {
-                    neighbor_fields.corners[corner as usize] =
-                        Some(NeighborCornerSlice::from_field(field, corner));
+                    neighbor_fields.corners[corner as usize] = Some(
+                        NeighborCornerSlice::from_field_with_depth(field, corner, depth),
+                    );
                 }
             }
         }
@@ -382,7 +387,7 @@ impl sculptable::Sculptable<f32> for sdf_volume::SdfVolume {}
 
 // Backward compatibility aliases
 
-mod backwars_compatibility {
+mod backwards_compatibility {
     /// Backward compatibility alias
     #[deprecated(since = "0.18.0", note = "Renamed to SdfVolume")]
     pub type DensityField = crate::SdfVolume;
