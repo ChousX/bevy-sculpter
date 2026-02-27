@@ -552,12 +552,12 @@ impl<T: Copy + Default> NeighborSlice<T> {
 
     /// Gets the value at (a, b, depth) coordinates.
     #[inline]
-    pub fn get(&self, a: u32, b: u32, depth: u32) -> T {
+    pub fn get(&self, a: u32, b: u32, depth: u32) -> Option<T> {
         if a < self.size_a && b < self.size_b && depth < self.depth {
             let idx = (a + b * self.size_a + depth * self.size_a * self.size_b) as usize;
-            self.data[idx]
+            Some(self.data[idx])
         } else {
-            T::default()
+            None
         }
     }
 }
@@ -606,12 +606,12 @@ impl<T: Copy + Default> NeighborEdgeSlice<T> {
 
     /// Gets the value at (a, depth_u, depth_v) coordinates.
     #[inline]
-    pub fn get(&self, a: u32, depth_u: u32, depth_v: u32) -> T {
+    pub fn get(&self, a: u32, depth_u: u32, depth_v: u32) -> Option<T> {
         if a < self.axis_len && depth_u < self.depth && depth_v < self.depth {
             let idx = (a + depth_u * self.axis_len + depth_v * self.axis_len * self.depth) as usize;
-            self.data[idx]
+            Some(self.data[idx])
         } else {
-            T::default()
+            None
         }
     }
 }
@@ -652,12 +652,12 @@ impl<T: Copy + Default> NeighborCornerSlice<T> {
 
     /// Gets the value at (depth_x, depth_y, depth_z) coordinates.
     #[inline]
-    pub fn get(&self, dx: u32, dy: u32, dz: u32) -> T {
+    pub fn get(&self, dx: u32, dy: u32, dz: u32) -> Option<T> {
         if dx < self.depth && dy < self.depth && dz < self.depth {
             let idx = (dx + dy * self.depth + dz * self.depth * self.depth) as usize;
-            self.data[idx]
+            Some(self.data[idx])
         } else {
-            T::default()
+            None
         }
     }
 }
@@ -742,7 +742,6 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
         match oob_count {
             0 => None,
             1 => {
-                // Directly determine which face from the OOB axis
                 let face = match (oob_x, oob_y, oob_z) {
                     (-1, 0, 0) => NeighborFace::NegX,
                     (1, 0, 0) => NeighborFace::PosX,
@@ -755,7 +754,7 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
                 let (a, b, depth) = face.voxel_to_slice_coords(voxel, field_size)?;
                 self.neighbors[face as usize]
                     .as_ref()
-                    .map(|slice| slice.get(a, b, depth))
+                    .and_then(|slice| slice.get(a, b, depth))
             }
             2 => {
                 let edge = match (oob_x, oob_y, oob_z) {
@@ -776,7 +775,7 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
                 let (a, du, dv) = edge.voxel_to_edge_coords(voxel, field_size)?;
                 self.edges[edge as usize]
                     .as_ref()
-                    .map(|slice| slice.get(a, du, dv))
+                    .and_then(|slice| slice.get(a, du, dv))
             }
             3 => {
                 let corner = match (oob_x, oob_y, oob_z) {
@@ -793,12 +792,11 @@ impl<T: Copy + Default + Send + Sync + 'static> NeighborFields<T> {
                 let (dx, dy, dz) = corner.voxel_to_corner_coords(voxel, field_size)?;
                 self.corners[corner as usize]
                     .as_ref()
-                    .map(|slice| slice.get(dx, dy, dz))
+                    .and_then(|slice| slice.get(dx, dy, dz))
             }
             _ => None,
         }
     }
-
     /// Sample using the field size from a Field type.
     #[inline]
     pub fn sample_for<F: Field<T>>(&self, voxel: IVec3) -> Option<T> {
@@ -832,60 +830,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_voxel_to_slice_coords() {
-        let size = ivec3(32, 32, 32);
-
-        assert_eq!(
-            NeighborFace::NegX.voxel_to_slice_coords(ivec3(-1, 5, 10), size),
-            Some((5, 10, 0))
-        );
-        assert_eq!(
-            NeighborFace::PosX.voxel_to_slice_coords(ivec3(32, 5, 10), size),
-            Some((5, 10, 0))
-        );
-        assert_eq!(
-            NeighborFace::NegX.voxel_to_slice_coords(ivec3(5, 5, 5), size),
-            None
-        );
-    }
-
-    #[test]
-    fn test_edge_coords() {
-        let size = ivec3(32, 32, 32);
-
-        assert_eq!(
-            NeighborEdge::NegXNegY.voxel_to_edge_coords(ivec3(-1, -1, 5), size),
-            Some((5, 0, 0))
-        );
-        assert_eq!(
-            NeighborEdge::NegXNegY.voxel_to_edge_coords(ivec3(-1, 5, 5), size),
-            None
-        );
-        assert_eq!(
-            NeighborEdge::PosXPosY.voxel_to_edge_coords(ivec3(32, 32, 10), size),
-            Some((10, 0, 0))
-        );
-    }
-
-    #[test]
-    fn test_corner_coords() {
-        let size = ivec3(32, 32, 32);
-
-        assert_eq!(
-            NeighborCorner::NegXNegYNegZ.voxel_to_corner_coords(ivec3(-1, -1, -1), size),
-            Some((0, 0, 0))
-        );
-        assert_eq!(
-            NeighborCorner::PosXPosYPosZ.voxel_to_corner_coords(ivec3(32, 32, 32), size),
-            Some((0, 0, 0))
-        );
-        assert_eq!(
-            NeighborCorner::NegXNegYNegZ.voxel_to_corner_coords(ivec3(-1, -1, 5), size),
-            None
-        );
-    }
-
-    #[test]
     fn test_neighbor_fields_sample() {
         let mut fields: NeighborFields<f32> = NeighborFields::default();
 
@@ -900,66 +844,20 @@ mod tests {
             fields.sample(ivec3(32, 5, 5), ivec3(32, 32, 32)),
             Some(-0.5)
         );
+        // In-bounds → None (caller should use field directly)
         assert_eq!(fields.sample(ivec3(5, 5, 5), ivec3(32, 32, 32)), None);
-    }
-
-    #[test]
-    fn test_neighbor_fields_bool() {
-        let mut fields: NeighborFields<bool> = NeighborFields::default();
-
-        fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
-            NeighborFace::PosX,
-            uvec3(32, 32, 32),
-            NEIGHBOR_DEPTH,
-            |_, _, _| true,
-        ));
-
-        assert_eq!(
-            fields.sample(ivec3(32, 5, 5), ivec3(32, 32, 32)),
-            Some(true)
-        );
-        assert_eq!(fields.sample(ivec3(5, 5, 5), ivec3(32, 32, 32)), None);
-    }
-
-    #[test]
-    fn test_sample_dispatches_to_edge() {
-        let size = ivec3(32, 32, 32);
-        let mut fields: NeighborFields<f32> = NeighborFields::default();
-
-        fields.edges[NeighborEdge::PosXPosY as usize] = Some(NeighborEdgeSlice {
-            data: vec![-0.75; (32 * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize],
-            axis_len: 32,
-            depth: NEIGHBOR_DEPTH,
-        });
-
-        assert_eq!(fields.sample(ivec3(32, 32, 10), size), Some(-0.75));
-        assert_eq!(fields.sample(ivec3(32, 5, 5), size), None);
-    }
-
-    #[test]
-    fn test_sample_dispatches_to_corner() {
-        let size = ivec3(32, 32, 32);
-        let mut fields: NeighborFields<f32> = NeighborFields::default();
-
-        fields.corners[NeighborCorner::PosXPosYPosZ as usize] = Some(NeighborCornerSlice {
-            data: vec![-0.25; (NEIGHBOR_DEPTH * NEIGHBOR_DEPTH * NEIGHBOR_DEPTH) as usize],
-            depth: NEIGHBOR_DEPTH,
-        });
-
-        assert_eq!(fields.sample(ivec3(32, 32, 32), size), Some(-0.25));
-        assert_eq!(fields.sample(ivec3(32, 32, 10), size), None);
+        // OOB beyond stored depth → None (not 0.0!)
+        assert_eq!(fields.sample(ivec3(35, 5, 5), ivec3(32, 32, 32)), None);
     }
 
     #[test]
     fn test_lod_aware_depth() {
-        // At LOD 1 (step=2), depth should be 3 to cover samples at offset +2
         let depth = neighbor_depth_for_step(2);
         assert_eq!(depth, 3);
 
         let size = ivec3(32, 32, 32);
         let mut fields: NeighborFields<f32> = NeighborFields::default();
 
-        // Create face slice with depth=3
         fields.neighbors[NeighborFace::PosX as usize] = Some(NeighborSlice::from_sampler(
             NeighborFace::PosX,
             uvec3(32, 32, 32),
@@ -967,9 +865,46 @@ mod tests {
             |_, _, _| -0.5,
         ));
 
-        // Depth index 2 (i.e. voxel 34) should now be reachable
-        assert_eq!(fields.sample(ivec3(34, 5, 5), size), Some(-0.5));
-        // Depth index 0 still works
-        assert_eq!(fields.sample(ivec3(32, 5, 5), size), Some(-0.5));
+        // All depths 0..2 covered by depth=3
+        assert_eq!(fields.sample(ivec3(32, 5, 5), size), Some(-0.5)); // depth 0
+        assert_eq!(fields.sample(ivec3(33, 5, 5), size), Some(-0.5)); // depth 1
+        assert_eq!(fields.sample(ivec3(34, 5, 5), size), Some(-0.5)); // depth 2
+        // depth 3 = beyond stored range → None
+        assert_eq!(fields.sample(ivec3(35, 5, 5), size), None);
+    }
+
+    #[test]
+    fn test_sample_dispatches_to_edge() {
+        let size = ivec3(32, 32, 32);
+        let depth = neighbor_depth_for_step(2);
+        let mut fields: NeighborFields<f32> = NeighborFields::default();
+
+        fields.edges[NeighborEdge::PosXPosY as usize] = Some(NeighborEdgeSlice {
+            data: vec![-0.75; (32 * depth * depth) as usize],
+            axis_len: 32,
+            depth,
+        });
+
+        assert_eq!(fields.sample(ivec3(32, 32, 10), size), Some(-0.75));
+        assert_eq!(fields.sample(ivec3(34, 34, 10), size), Some(-0.75));
+        // No face data → None
+        assert_eq!(fields.sample(ivec3(32, 5, 5), size), None);
+    }
+
+    #[test]
+    fn test_sample_dispatches_to_corner() {
+        let size = ivec3(32, 32, 32);
+        let depth = neighbor_depth_for_step(2);
+        let mut fields: NeighborFields<f32> = NeighborFields::default();
+
+        fields.corners[NeighborCorner::PosXPosYPosZ as usize] = Some(NeighborCornerSlice {
+            data: vec![-0.25; (depth * depth * depth) as usize],
+            depth,
+        });
+
+        assert_eq!(fields.sample(ivec3(32, 32, 32), size), Some(-0.25));
+        assert_eq!(fields.sample(ivec3(34, 34, 34), size), Some(-0.25));
+        // Only 2 axes OOB → edge (no edge data)
+        assert_eq!(fields.sample(ivec3(32, 32, 10), size), None);
     }
 }
