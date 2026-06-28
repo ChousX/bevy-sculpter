@@ -1,89 +1,70 @@
 {
-  description = "bevy-sculpter";
+  description = "A flake using Oxalica's rust-overlay wrapped with bevy-flake.";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    systems.url = "github:nix-systems/default";
-    crane.url = "github:ipetkov/crane";
-    fenix = {
-      url = "github:nix-community/fenix";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    bevy-flake = {
+      url = "github:swagtop/bevy-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    crane,
-    fenix,
-    systems,
-    ...
-  }: let
-    forEachSystem = f:
-      nixpkgs.lib.genAttrs (import systems) (system: let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [
-            fenix.overlays.default
-          ];
-        };
-
-        rust-toolchain = pkgs.fenix.stable.withComponents [
-          "cargo"
-          "llvm-tools"
-          "rustc"
-          "clippy"
-          "rust-analyzer"
-          "rustc"
-          "rustfmt"
-        ];
-
-        bevy-runtime-deps = with pkgs; [
-          pkg-config
-          alsa-lib
-          vulkan-tools
-          vulkan-headers
-          vulkan-loader
-          vulkan-validation-layers
-          libudev-zero
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXi
-          xorg.libXrandr
-          xorg.libxcb
-          libxkbcommon
-          wayland
-        ];
-
-        bevy-build-deps = with pkgs; [
-          clang
-          lld
-        ];
-      in
-        f {
-          inherit pkgs;
-          craneLib = (crane.mkLib pkgs).overrideToolchain rust-toolchain;
-
-          all-deps = bevy-build-deps ++ bevy-runtime-deps;
-        });
-  in {
-    formatter = forEachSystem ({pkgs, ...}: pkgs.alejandra);
-
-    devShells = forEachSystem ({
-      pkgs,
-      craneLib,
-      all-deps,
+  outputs =
+    {
+      nixpkgs,
+      bevy-flake,
+      rust-overlay,
       ...
-    }: {
-      default = craneLib.devShell {
-        packages = all-deps;
-        shellHook = ''
-          export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath (with pkgs; [
-            libxkbcommon
-            vulkan-loader
-          ])}"
-        '';
-      };
-    });
-  };
+    }:
+    let
+      bf = bevy-flake.lib.configure (
+        { pkgs, ... }:
+        {
+          src = ./.;
+          rustToolchain =
+            targets:
+            let
+              pkgs-with-overlay = (
+                import nixpkgs {
+                  inherit (pkgs.stdenv.hostPlatform) system;
+                  overlays = [ (import rust-overlay) ];
+                }
+              );
+              channel = "nightly"; # For stable, use "stable".
+            in
+            pkgs-with-overlay.rust-bin.${channel}.latest.default.override {
+              inherit targets;
+              extensions = [
+                "rust-src"
+                "rust-analyzer"
+              ];
+            };
+        }
+      );
+    in
+    {
+      inherit (bf) packages formatter;
+
+      devShells = bf.lib.forSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = pkgs.mkShell {
+            name = "bevy";
+            packages = [
+              bf.packages.${system}.rust-toolchain
+              pkgs.bacon
+              #bf.packages.${system}.dioxus-cli
+              #bf.packages.${system}.bevy-cli
+            ];
+          };
+        }
+      );
+    };
 }

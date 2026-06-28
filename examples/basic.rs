@@ -100,7 +100,7 @@ fn setup(mut commands: Commands, _mesh_size: Res<MeshSize>) {
     commands.spawn((
         DirectionalLight {
             illuminance: 10000.0,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
